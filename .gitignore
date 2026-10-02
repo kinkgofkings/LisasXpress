@@ -1,0 +1,9 @@
+node_modules/
+data/*.db
+data/*.db-*
+data/secret
+public/uploads/*
+!public/uploads/.gitkeep
+.wrangler/
+.tools/
+dist/
