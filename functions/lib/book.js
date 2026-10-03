@@ -7,7 +7,10 @@ import {
 } from "../../server/desk.js";
 
 function json(data, status = 200) {
-  return Response.json(data, { status });
+  return Response.json(data, {
+    status,
+    headers: { "cache-control": "no-store", "cdn-cache-control": "no-store" }
+  });
 }
 
 function lines(value) {
@@ -243,12 +246,38 @@ async function uploadMedia(request, env, recipeId, url) {
   return savedRecipe(env, user, recipe.id, 201);
 }
 
+let bookReady = null;
+function prepareBook(env) {
+  if (!bookReady) {
+    bookReady = env.DB.prepare("ALTER TABLE comments ADD COLUMN attachments TEXT NOT NULL DEFAULT '[]'").run().catch(() => {});
+  }
+  return bookReady;
+}
+
+function liveDb(env) {
+  try {
+    if (typeof env.DB?.withSession === "function") return env.DB.withSession("first-primary");
+  } catch { /* the plain binding still reads and writes */ }
+  return env.DB;
+}
+
 export async function handle(request, env) {
   const url = new URL(request.url);
   const parts = url.pathname.split("/").filter(Boolean);
   if (parts[0] !== "api") return json({ error: "That page is not in the book." }, 404);
+  let session = null;
+  const bound = new Proxy(env, {
+    get(target, prop, receiver) {
+      if (prop === "DB") {
+        if (!session) session = liveDb(target);
+        return session;
+      }
+      return Reflect.get(target, prop, receiver);
+    }
+  });
   try {
-    return await route(request, env, url, parts.slice(1));
+    await prepareBook(bound);
+    return await route(request, bound, url, parts.slice(1));
   } catch (error) {
     const status = error.status || 500;
     return json({
@@ -600,20 +629,34 @@ async function fillSocial(env, user, type, keys, map) {
       if (row.kind === "star") box.starred = true;
     }
   }
-  const comments = await env.DB.prepare(
-    `SELECT comments.id, comments.body, comments.created_at AS createdAt, comments.target_id AS targetId,
-            users.id AS userId, users.name AS name, users.avatar_path AS avatar
-     FROM comments JOIN users ON users.id = comments.user_id
-     WHERE comments.target_type = ? AND comments.target_id IN (${marks})
-     ORDER BY comments.id ASC`
-  ).bind(type, ...keys).all();
+  const comments = await loadComments(env, type, keys, marks);
   for (const row of comments.results || []) {
+    let attachments = [];
+    try { attachments = JSON.parse(row.attachments || "[]"); } catch { attachments = []; }
     map[String(row.targetId)]?.comments.push({
       id: Number(row.id),
       body: row.body,
+      attachments: Array.isArray(attachments) ? attachments : [],
       createdAt: row.createdAt,
       author: { id: row.userId, name: row.name, avatar: row.avatar }
     });
+  }
+}
+
+async function loadComments(env, type, keys, marks) {
+  const tail = `comments.created_at AS createdAt, comments.target_id AS targetId,
+            users.id AS userId, users.name AS name, users.avatar_path AS avatar
+     FROM comments JOIN users ON users.id = comments.user_id
+     WHERE comments.target_type = ? AND comments.target_id IN (${marks})
+     ORDER BY comments.id ASC`;
+  try {
+    return await env.DB.prepare(
+      `SELECT comments.id, comments.body, comments.attachments, ${tail}`
+    ).bind(type, ...keys).all();
+  } catch {
+    return await env.DB.prepare(
+      `SELECT comments.id, comments.body, ${tail}`
+    ).bind(type, ...keys).all();
   }
 }
 
@@ -771,23 +814,49 @@ async function addComment(request, env) {
   const type = String(body.targetType || "");
   const id = String(body.targetId || "");
   const text = String(body.body || "").trim().slice(0, 1000);
+  const attachments = [];
+  for (const item of Array.isArray(body.attachments) ? body.attachments : []) {
+    const path = String(item?.path || "");
+    if (!/^\/uploads\/[\w.-]+$/.test(path)) continue;
+    const row = await env.DB.prepare("SELECT mime FROM files WHERE path = ?").bind(path).first();
+    if (!row) continue;
+    const mime = String(row.mime || "");
+    attachments.push({
+      path,
+      mime,
+      name: String(item.name || "File").replace(/[^\w.\- ]+/g, "").slice(0, 80) || "File",
+      kind: mime.startsWith("video/") ? "video" : "image"
+    });
+  }
   if (!["recipe", "note", "film", "world"].includes(type) || !id) return json({ error: "That comment could not be saved." }, 400);
-  if (!text) return json({ error: "Write a comment first." }, 400);
+  if (!text && !attachments.length) return json({ error: "Write a comment, or add a picture or video." }, 400);
   if (!await targetExists(env, type, id)) return json({ error: "That could not be found." }, 404);
   const now = new Date().toISOString();
   const result = await env.DB.prepare(
-    "INSERT INTO comments (user_id, target_type, target_id, body, created_at) VALUES (?, ?, ?, ?, ?)"
-  ).bind(user.id, type, id, text, now).run();
+    "INSERT INTO comments (user_id, target_type, target_id, body, attachments, created_at) VALUES (?, ?, ?, ?, ?, ?)"
+  ).bind(user.id, type, id, text, JSON.stringify(attachments), now).run();
+  const inserted = await env.DB.prepare("SELECT last_insert_rowid() AS id").first();
   return json({
-    comment: { id: Number(result.meta?.last_row_id) || 0, body: text, createdAt: now, author: person(user) }
+    comment: {
+      id: Number(inserted?.id) || Number(result.meta?.last_row_id) || 0,
+      body: text,
+      attachments,
+      createdAt: now,
+      author: person(user)
+    }
   }, 201);
 }
 
 async function deleteComment(request, env, id) {
   const user = await userFrom(env, request);
   if (!user) return json({ error: "Sign in first." }, 401);
-  const comment = await env.DB.prepare("SELECT id FROM comments WHERE id = ? AND user_id = ?").bind(id, user.id).first();
+  const comment = await env.DB.prepare("SELECT id, attachments FROM comments WHERE id = ? AND user_id = ?").bind(id, user.id).first();
   if (!comment) return json({ error: "That comment is not yours." }, 404);
+  let attachments = [];
+  try { attachments = JSON.parse(comment.attachments || "[]"); } catch { attachments = []; }
+  if (Array.isArray(attachments)) {
+    for (const file of attachments) await removeStored(env, file?.path);
+  }
   await env.DB.prepare("DELETE FROM comments WHERE id = ?").bind(id).run();
   return json({ ok: true });
 }
@@ -1043,9 +1112,11 @@ async function createNote(request, env) {
   const result = await env.DB.prepare(
     "INSERT INTO notes (user_id, title, body, attachments, updated_at) VALUES (?, ?, ?, ?, ?)"
   ).bind(user.id, title, text, JSON.stringify(attachments), now).run();
+  const inserted = await env.DB.prepare("SELECT last_insert_rowid() AS id").first();
+  const id = Number(inserted?.id) || Number(result.meta?.last_row_id) || 0;
   return json({
     note: {
-      id: Number(result.meta?.last_row_id) || 0,
+      id,
       title,
       body: text,
       attachments,
@@ -1059,14 +1130,25 @@ async function createNote(request, env) {
 async function updateNote(request, env, id) {
   const user = await userFrom(env, request);
   if (!user) return json({ error: "Sign in first." }, 401);
-  const note = await env.DB.prepare("SELECT * FROM notes WHERE id = ? AND user_id = ?").bind(id, user.id).first();
+  const noteId = Number(id);
+  if (!Number.isInteger(noteId) || noteId < 1) return json({ error: "That note could not be saved." }, 400);
+  const note = await env.DB.prepare(
+    "SELECT id, title, body, attachments FROM notes WHERE id = ? AND user_id = ?"
+  ).bind(noteId, user.id).first();
   if (!note) return json({ error: "That note is not yours." }, 404);
   const body = await readJson(request);
-  const title = String(body.title ?? note.title).trim().slice(0, 120) || "Untitled note";
-  const text = String(body.body ?? note.body).slice(0, 20000);
+  const text = String(body.body ?? note.body ?? "").slice(0, 20000);
+  const title = String(body.title || text.split("\n")[0] || note.title || "").trim().slice(0, 120) || "Note";
   const updatedAt = new Date().toISOString();
-  await env.DB.prepare("UPDATE notes SET title = ?, body = ?, updated_at = ? WHERE id = ?").bind(title, text, updatedAt, note.id).run();
-  return json({ note: { id: note.id, title, body: text, updatedAt } });
+  await env.DB.prepare(
+    "UPDATE notes SET title = ?, body = ?, updated_at = ? WHERE id = ? AND user_id = ?"
+  ).bind(title, text, updatedAt, noteId, user.id).run();
+  let attachments = [];
+  try { attachments = JSON.parse(note.attachments || "[]"); } catch { attachments = []; }
+  if (!Array.isArray(attachments)) attachments = [];
+  return json({
+    note: { id: noteId, title, body: text, attachments, updatedAt, author: person(user) }
+  });
 }
 
 async function deleteNote(request, env, id) {

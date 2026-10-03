@@ -84,12 +84,16 @@ db.exec(`
     target_type TEXT NOT NULL,
     target_id TEXT NOT NULL,
     body TEXT NOT NULL,
+    attachments TEXT NOT NULL DEFAULT '[]',
     created_at TEXT NOT NULL
   );
 `);
 
 try {
   db.exec("ALTER TABLE notes ADD COLUMN attachments TEXT NOT NULL DEFAULT '[]'");
+} catch { /* the column is already there */ }
+try {
+  db.exec("ALTER TABLE comments ADD COLUMN attachments TEXT NOT NULL DEFAULT '[]'");
 } catch { /* the column is already there */ }
 try {
   db.exec("ALTER TABLE recipes ADD COLUMN youtube TEXT NOT NULL DEFAULT ''");

@@ -120,5 +120,6 @@ CREATE TABLE IF NOT EXISTS comments (
   target_type TEXT NOT NULL,
   target_id TEXT NOT NULL,
   body TEXT NOT NULL,
+  attachments TEXT NOT NULL DEFAULT '[]',
   created_at TEXT NOT NULL
 );

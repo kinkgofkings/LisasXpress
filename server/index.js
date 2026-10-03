@@ -205,16 +205,19 @@ function attachSocial(user, type, rows, idOf) {
       }
     }
     const comments = db.prepare(`
-      SELECT comments.id, comments.body, comments.created_at AS createdAt, comments.target_id AS targetId,
+      SELECT comments.id, comments.body, comments.attachments, comments.created_at AS createdAt, comments.target_id AS targetId,
              users.id AS userId, users.name AS name, users.avatar_path AS avatar
       FROM comments JOIN users ON users.id = comments.user_id
       WHERE comments.target_type = ? AND comments.target_id IN (${marks})
       ORDER BY comments.id ASC
     `).all(type, ...ids);
     for (const row of comments) {
+      let attachments = [];
+      try { attachments = JSON.parse(row.attachments || "[]"); } catch { attachments = []; }
       map[String(row.targetId)]?.comments.push({
         id: row.id,
         body: row.body,
+        attachments: Array.isArray(attachments) ? attachments : [],
         createdAt: row.createdAt,
         author: { id: row.userId, name: row.name, avatar: row.avatar || "" }
       });
@@ -887,15 +890,30 @@ app.post("/api/comments", (req, res) => {
   if (!["recipe", "note", "film", "world"].includes(type) || !id) {
     return res.status(400).json({ error: "That comment could not be saved." });
   }
-  if (!text) return res.status(400).json({ error: "Write a comment first." });
+  const attachments = [];
+  for (const item of Array.isArray(req.body.attachments) ? req.body.attachments : []) {
+    const path = String(item?.path || "");
+    if (!/^\/uploads\/[\w.-]+$/.test(path)) continue;
+    const row = db.prepare("SELECT mime FROM files WHERE path = ?").get(path);
+    if (!row) continue;
+    const mime = String(row.mime || "");
+    attachments.push({
+      path,
+      mime,
+      name: String(item.name || "File").replace(/[^\w.\- ]+/g, "").slice(0, 80) || "File",
+      kind: mime.startsWith("video/") ? "video" : "image"
+    });
+  }
+  if (!text && !attachments.length) return res.status(400).json({ error: "Write a comment, or add a picture or video." });
   const now = new Date().toISOString();
   const result = db.prepare(
-    "INSERT INTO comments (user_id, target_type, target_id, body, created_at) VALUES (?, ?, ?, ?, ?)"
-  ).run(user.id, type, id, text, now);
+    "INSERT INTO comments (user_id, target_type, target_id, body, attachments, created_at) VALUES (?, ?, ?, ?, ?, ?)"
+  ).run(user.id, type, id, text, JSON.stringify(attachments), now);
   res.status(201).json({
     comment: {
       id: Number(result.lastInsertRowid),
       body: text,
+      attachments,
       createdAt: now,
       author: { id: user.id, name: user.name, avatar: user.avatar_path || "" }
     }

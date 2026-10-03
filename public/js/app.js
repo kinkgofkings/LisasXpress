@@ -1,4 +1,4 @@
-import { attachCallMedia, bindDesk, callLayer, deskAction, deskNavigated, deskSubmit, deskTick, linkTools, messagesView, pageLink, paintDeskBadge, searchView, warmRinger } from "./desk.js?v=24";
+import { attachCallMedia, bindDesk, callLayer, clearCallSound, deskAction, deskNavigated, deskSubmit, deskTick, linkTools, messagesView, pageLink, paintDeskBadge, previewCallSound, ringerLabel, saveCallSound, searchView, warmRinger } from "./desk.js?v=26";
 
 const API = window.APP_CONFIG?.apiBase || "";
 const state = {
@@ -27,7 +27,9 @@ const state = {
   worldLoading: false,
   showInstall: "",
   noteDraft: "",
+  homeNotes: 3,
   noteFiles: [],
+  commentPicks: {},
   editingNote: "",
   filmDraft: { title: "", description: "" },
   libraryEdit: "",
@@ -57,6 +59,7 @@ const state = {
   hostQ: "",
   hostAnswer: null,
   hostBusy: false,
+  ringerName: "",
   ringingFor: "",
   notePosting: false,
   reacting: ""
@@ -73,7 +76,7 @@ const esc = (value) => String(value ?? "").replace(/[&<>"']/g, (ch) => ({
 function asset(src) {
   if (!src) return "";
   if (/^https?:\/\//.test(src)) return src;
-  if (src.startsWith("/uploads/")) return `${API}${src}${src.includes("?") ? "&" : "?"}v=3`;
+  if (src.startsWith("/uploads/")) return `${API}${src}${src.includes("?") ? "&" : "?"}v=4`;
   return src;
 }
 
@@ -147,11 +150,19 @@ async function uploadPieces(file, name) {
   });
   const part = started.partSize || 800_000;
   for (let offset = 0, idx = 0; offset < file.size; offset += part, idx += 1) {
-    await api(`/api/media/parts?path=${encodeURIComponent(started.path)}&idx=${idx}`, {
-      method: "PUT",
-      body: file.slice(offset, offset + part),
-      headers: { "Content-Type": "application/octet-stream" }
-    });
+    try {
+      await api(`/api/media/parts?path=${encodeURIComponent(started.path)}&idx=${idx}`, {
+        method: "PUT",
+        body: file.slice(offset, offset + part),
+        headers: { "Content-Type": "application/octet-stream" },
+        signal: AbortSignal.timeout(60_000)
+      });
+    } catch (error) {
+      if (error?.name === "TimeoutError" || error?.name === "AbortError") {
+        throw new Error("That upload took too long. Try a shorter video.");
+      }
+      throw error;
+    }
   }
   return started;
 }
@@ -286,7 +297,7 @@ function commentSection(type) {
 }
 
 function appBar() {
-  const menuOn = state.menu || ["family", "profile", "account", "privacy", "terms", "new", "edit", "search"].includes(route().name);
+  const menuOn = state.menu || ["family", "profile", "account", "privacy", "terms", "new", "edit", "search", "sound"].includes(route().name);
   const item = (href, icon, label, on) => `<a class="appbar-item ${on ? "active" : ""}" href="${href}" ${on ? 'aria-current="page"' : ""}><i class="bi ${icon}" aria-hidden="true"></i><span>${label}</span></a>`;
   return `<nav class="appbar" aria-label="Sections">
     ${item("#/", "bi-book", "Book", sectionOn("home"))}
@@ -344,6 +355,7 @@ function superMenu() {
       </div>
       <p class="menu-label">Account</p>
       <div class="menu-list">
+        ${menuLink("#/sound", "bi-bell", "Call sound", sectionOn("sound"))}
         ${user ? menuLink("#/profile", "bi-person-circle", "Profile", sectionOn("profile")) : menuLink("#/account", "bi-box-arrow-in-right", "Log in", sectionOn("account"))}
         ${user ? `<button class="menu-link" type="button" data-action="sign-out"><i class="bi bi-box-arrow-right" aria-hidden="true"></i><span>Log out</span></button>` : ""}
       </div>
@@ -353,6 +365,29 @@ function superMenu() {
         ${menuLink("#/terms", "bi-file-earmark-text", "Terms of use", sectionOn("terms"))}
       </div>
     </section>`;
+}
+
+function soundView() {
+  const chosen = state.ringerName || "The book's ring";
+  return shell(`
+    <nav class="crumbs" aria-label="Breadcrumb"><a href="#/">Home</a><span class="crumb-gap" aria-hidden="true">/</span><span aria-current="page">Call sound</span></nav>
+    <h2 class="page-title">Call sound</h2>
+    <p>Two sounds can play when someone calls. They belong to this book only. Your other apps keep their own sounds.</p>
+    <section class="panel">
+      <h3>While the book is open</h3>
+      <p>The current sound is ${esc(chosen)}.</p>
+      <div class="field"><label>Choose a sound file<input id="ringer-file" type="file" accept="audio/*"></label></div>
+      <div class="actions">
+        <button class="btn" type="button" data-action="preview-ringer">Play</button>
+        <button class="btn quiet" type="button" data-action="clear-ringer">Use the book's ring</button>
+      </div>
+    </section>
+    <section class="panel">
+      <h3>The loud notification</h3>
+      <p>That banner uses the sound set for this app on the phone. On the Razr, open Settings, then Apps, then Lisa's Recipe Book. Open Notifications, then Sound, and choose the tone you want.</p>
+      <p>If the book is still open in Chrome, the path is Settings, Apps, Chrome, Notifications, then this book’s site, then Sound.</p>
+    </section>
+  `);
 }
 
 function privacyView() {
@@ -452,6 +487,8 @@ function home() {
   const outside = Boolean(state.q.trim()) && !list.length;
   const featured = state.recipes.find((recipe) => recipe.id === "oak-smoked-brisket") || state.recipes[0];
   return shell(`
+    ${familyFeed()}
+    ${!state.q.trim() && state.cuisine === "all" ? stapleBands() : ""}
     <section class="hero">
       <div class="hero-copy">
         <p class="eyebrow">Cajun, Texas, and the open library</p>
@@ -470,7 +507,6 @@ function home() {
       ${[["all", "All"], ["gym", "The Gym"], ["texas", "Texas"], ["texmex", "Tex-Mex"], ["stews", "Stews"], ["breakfast", "Breakfast"], ["sweets", "Sweets"], ["kids", "Little ones"], ["pets", "The Pet Connection"], ["garden", "Garden"], ["cajun", "Cajun"], ["library", "Kept"]].map(([item, label]) => `<button type="button" class="chip ${state.cuisine === item ? "active" : ""}" data-cuisine="${item}">${label}</button>`).join("")}
       <span class="empty">${list.length} recipes</span>
     </div>
-    ${!state.q.trim() && state.cuisine === "all" ? stapleBands() : ""}
     ${outside && state.bookHitNote ? `<p class="empty">${esc(state.bookHitNote)}</p>` : ""}
     <section class="grid">
       ${outside
@@ -492,29 +528,150 @@ function home() {
   `);
 }
 
-function plateBand(kicker, title, recipes, limit = 4) {
+const filmPosters = new Map();
+
+function paintFilmCovers() {
+  document.querySelectorAll(".film-card").forEach((card) => {
+    const src = card.dataset.src;
+    const img = card.querySelector(".film-poster");
+    if (!src || !img || card.dataset.painting === "1") return;
+    if (filmPosters.has(src)) {
+      img.src = filmPosters.get(src);
+      img.hidden = false;
+      return;
+    }
+    card.dataset.painting = "1";
+    const probe = document.createElement("video");
+    probe.preload = "metadata";
+    probe.muted = true;
+    probe.playsInline = true;
+    probe.src = src;
+    const finish = () => {
+      card.dataset.painting = "";
+      try {
+        if (!probe.videoWidth) return;
+        const canvas = document.createElement("canvas");
+        const scale = Math.min(1, 640 / probe.videoWidth);
+        canvas.width = Math.max(1, Math.round(probe.videoWidth * scale));
+        canvas.height = Math.max(1, Math.round(probe.videoHeight * scale));
+        canvas.getContext("2d").drawImage(probe, 0, 0, canvas.width, canvas.height);
+        const url = canvas.toDataURL("image/jpeg", 0.74);
+        filmPosters.set(src, url);
+        if (img.isConnected) {
+          img.src = url;
+          img.hidden = false;
+        }
+      } catch { /* the play button stays up */ }
+      probe.removeAttribute("src");
+      probe.load();
+    };
+    probe.addEventListener("loadeddata", () => {
+      const mark = Number.isFinite(probe.duration) ? Math.min(0.4, probe.duration / 8) : 0.1;
+      if (mark > 0) {
+        try { probe.currentTime = mark; return; } catch { /* draw the first frame */ }
+      }
+      finish();
+    }, { once: true });
+    probe.addEventListener("seeked", finish, { once: true });
+    probe.addEventListener("error", () => { card.dataset.painting = ""; }, { once: true });
+  });
+}
+
+function filmCover(src) {
+  const safe = esc(src);
+  return `<div class="film-card" data-src="${safe}">
+    <button type="button" class="film-open" data-action="play-film" aria-label="Play video">
+      <img class="film-poster" alt="" hidden>
+      <span class="film-play" aria-hidden="true"></span>
+    </button>
+    <video src="${safe}" controls playsinline preload="none" hidden></video>
+  </div>`;
+}
+
+function familyFeed() {
+  const notes = state.user ? (state.notes || []) : [];
+  if (!notes.length) return "";
+  if (notes.length <= 6) {
+    return `<section class="news-feed">
+      ${storyRow("Latest", notes.map(noteStory))}
+      <div class="news-stack">${notes.map((note) => notePost(note)).join("")}</div>
+    </section>`;
+  }
+  const parts = [];
+  let index = 0;
+  let rail = true;
+  while (index < notes.length) {
+    const left = notes.length - index;
+    if (rail) {
+      const take = left <= 4 ? left : Math.min(8, left - 3);
+      parts.push(storyRow(parts.length ? "More from the family" : "Latest", notes.slice(index, index + take).map(noteStory)));
+      index += take;
+    } else {
+      const take = Math.min(4, left);
+      parts.push(`<div class="news-stack">${notes.slice(index, index + take).map((note) => notePost(note)).join("")}</div>`);
+      index += take;
+    }
+    rail = !rail;
+  }
+  return `<section class="news-feed">${parts.join("")}</section>`;
+}
+
+function storyRow(title, cards) {
+  if (!cards.length) return "";
+  return `<div class="news-block">
+    <h2 class="news-label">${esc(title)}</h2>
+    <div class="story-rail">${cards.join("")}</div>
+  </div>`;
+}
+
+function noteStory(note) {
+  const files = Array.isArray(note.attachments) ? note.attachments : [];
+  const image = files.find((item) => item.kind === "image");
+  const video = files.find((item) => item.kind === "video");
+  const media = image
+    ? `<button type="button" class="story-hit" data-action="jump-note" data-id="${esc(note.id)}"><img src="${esc(asset(image.path))}" alt="" loading="lazy" decoding="async"></button>`
+    : (video ? filmCover(asset(video.path)) : `<button type="button" class="story-hit story-ph" data-action="jump-note" data-id="${esc(note.id)}">${esc((note.author?.name || "N").trim().slice(0, 1) || "N")}</button>`);
+  const title = String(note.body || note.title || "A note").replace(/\s+/g, " ").trim().slice(0, 72);
+  return `<article class="story-card">
+    <div class="story-media">${media}</div>
+    <button type="button" class="story-caption" data-action="jump-note" data-id="${esc(note.id)}">${esc(title)}</button>
+  </article>`;
+}
+
+function recipeStory(recipe) {
+  return `<a class="story-card" href="#/recipe/${esc(recipe.id)}">
+    ${recipe.image ? `<img src="${esc(asset(recipe.image))}" alt="" loading="lazy" decoding="async">` : `<span class="story-ph">${esc(recipe.title.slice(0, 1))}</span>`}
+    <span class="story-caption">${esc(recipe.title)}</span>
+  </a>`;
+}
+
+function plateBand(kicker, title, recipes, limit = 4, layout = "stack") {
   const shown = recipes.slice(0, limit);
   if (!shown.length) return "";
-  return `<section class="library-band">
-    <div class="band-head"><div><p class="kicker">${esc(kicker)}</p><h2>${esc(title)}</h2></div></div>
-    <div class="grid">${shown.map(card).join("")}</div>
+  const body = layout === "rail"
+    ? `<div class="story-rail">${shown.map(recipeStory).join("")}</div>`
+    : `<div class="plate-stack">${shown.map(card).join("")}</div>`;
+  return `<section class="news-block">
+    <h2 class="news-label">${esc(kicker)}</h2>
+    ${body}
   </section>`;
 }
 
 function stapleBands() {
   const plates = state.recipes;
-  return [
-    plateBand("The Gym", "Protein plates for Benito and anyone who trains.", plates.filter((recipe) => recipe.cuisine === "gym"), 10),
-    plateBand("Texas", "The Texas table.", plates.filter((recipe) => recipe.cuisine === "texas" && recipe.category === "Mains")),
-    plateBand("Breakfast", "Morning plates.", plates.filter((recipe) => recipe.category === "Breakfast")),
-    plateBand("Tex-Mex", "Tex-Mex, on this table.", plates.filter((recipe) => recipe.cuisine === "texmex" && recipe.category === "Mains")),
-    plateBand("Sweets", "Cobblers, fudge, and fried ice cream.", plates.filter((recipe) => recipe.category === "Sweets")),
-    plateBand("From the garden", "Pulled, washed, pickled, and canned.", plates.filter((recipe) => recipe.cuisine === "garden")),
-    plateBand("The pot", "Pot roasts and homemade stews.", plates.filter((recipe) => /stew|pot roast/i.test(recipe.title)), 6),
-    plateBand("Little ones", "Soft fruit for babies. Fruit, yogurt, and oats for toddlers.", plates.filter((recipe) => recipe.cuisine === "kids"), 6),
-    plateBand("The Pet Connection", "Cooked meals. Meat, liver, vegetables, and eggshell.", plates.filter((recipe) => recipe.cuisine === "pets" && recipe.category === "Meals"), 8),
-    plateBand("Dog treats", "Treats. Not the whole supper.", plates.filter((recipe) => recipe.cuisine === "pets" && recipe.category !== "Meals"), 8)
-  ].join("");
+  const bands = [
+    ["The Gym", "Protein plates for Benito and anyone who trains.", plates.filter((recipe) => recipe.cuisine === "gym"), 8],
+    ["Texas", "The Texas table.", plates.filter((recipe) => recipe.cuisine === "texas" && recipe.category === "Mains"), 4],
+    ["Breakfast", "Morning plates.", plates.filter((recipe) => recipe.category === "Breakfast"), 8],
+    ["Tex-Mex", "Tex-Mex, on this table.", plates.filter((recipe) => recipe.cuisine === "texmex" && recipe.category === "Mains"), 4],
+    ["Sweets", "Cobblers, fudge, and fried ice cream.", plates.filter((recipe) => recipe.category === "Sweets"), 8],
+    ["From the garden", "Pulled, washed, pickled, and canned.", plates.filter((recipe) => recipe.cuisine === "garden"), 4],
+    ["The pot", "Pot roasts and homemade stews.", plates.filter((recipe) => /stew|pot roast/i.test(recipe.title)), 6],
+    ["Little ones", "Soft fruit for babies. Fruit, yogurt, and oats for toddlers.", plates.filter((recipe) => recipe.cuisine === "kids"), 4],
+    ["The Pet Connection", "Cooked meals. Meat, liver, vegetables, and eggshell.", plates.filter((recipe) => recipe.cuisine === "pets" && recipe.category === "Meals"), 8],
+    ["Dog treats", "Treats. Not the whole supper.", plates.filter((recipe) => recipe.cuisine === "pets" && recipe.category !== "Meals"), 4]
+  ];
+  return bands.map((band, index) => plateBand(band[0], band[1], band[2], band[3], index % 2 === 0 ? "rail" : "stack")).join("");
 }
 
 function worldCard(meal) {
@@ -543,7 +700,7 @@ function card(recipe) {
   const target = reactionTarget(recipe);
   return `<article class="card">
     <a class="card-link" href="#/recipe/${recipe.id}">
-      ${recipe.image ? `<img src="${esc(asset(recipe.image))}" alt="${esc(recipe.title)}">` : `<div class="ph"></div>`}
+      ${recipe.image ? `<img src="${esc(asset(recipe.image))}" alt="${esc(recipe.title)}" loading="lazy" decoding="async">` : `<div class="ph"></div>`}
       <div>
         <div class="kicker">${esc(cuisineLabel(recipe.cuisine))} · ${esc(recipe.category)}${recipe.family ? `<span class="badge">Tex's kitchen</span>` : ""}</div>
         <h2>${esc(recipe.title)}</h2>
@@ -704,8 +861,10 @@ function notesView() {
           <label class="tool">${iconFile()}<span>File</span><input data-note-pick="file" type="file" accept="application/pdf,text/plain,.pdf,.txt" multiple></label>`}
           ${state.editingNote ? `<button class="btn quiet" type="button" data-action="cancel-note">Cancel</button>` : ""}
           <button class="btn" type="submit" data-action="post-note">${state.notePosting ? "Posting…" : (state.editingNote ? "Save" : "Post")}</button>
+        </div>
       </form>
-      ${state.notes.map(notePost).join("") || `<p class="empty composer-empty">Family notes will show up here.</p>`}
+      ${state.notesError ? `<p class="empty">${esc(state.notesError)}</p>` : ""}
+      ${state.notes.map(notePost).join("") || (state.notesError ? "" : `<p class="empty composer-empty">Family notes will show up here.</p>`)}
     </div>
   `);
 }
@@ -732,17 +891,17 @@ function iconFile() {
   return `<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M7 3.5h6.2L19 9.2V19a1.5 1.5 0 0 1-1.5 1.5h-10A1.5 1.5 0 0 1 6 19V5a1.5 1.5 0 0 1 1-1.5Zm5.5 1.6V9h4.1l-4.1-3.9ZM8.2 12.2h7.6v1.4H8.2v-1.4Zm0 3h5.4v1.4H8.2v-1.4Z"/></svg>`;
 }
 
-function notePost(note) {
+function notePost(note, mode) {
   const files = Array.isArray(note.attachments) ? note.attachments : [];
   const visual = files.filter((item) => item.kind === "image" || item.kind === "video");
   const docs = files.filter((item) => item.kind === "file");
   const media = visual.map((item) => item.kind === "video"
-    ? `<video src="${esc(asset(item.path))}" controls playsinline></video>`
-    : `<img src="${esc(asset(item.path))}" alt="">`).join("");
+    ? filmCover(asset(item.path))
+    : `<img src="${esc(asset(item.path))}" alt="" loading="lazy" decoding="async">`).join("");
   const chips = docs.map((item) => `<a class="file-chip" href="${esc(asset(item.path))}" download="${esc(item.name || "file")}">${iconFile()}<span>${esc(item.name || "File")}</span></a>`).join("");
   const author = note.author || { name: "Family" };
   const mine = state.user && String(note.author?.id) === String(state.user.id);
-  return `<article class="post">
+  return `<article class="post" data-note="${esc(note.id)}">
     <header>
       ${face(author)}
       <div>
@@ -757,10 +916,18 @@ function notePost(note) {
     ${note.body ? `<p>${esc(note.body)}</p>` : ""}
     ${media ? `<div class="post-media ${visual.length > 1 ? "many" : "one"}">${media}</div>` : ""}
     ${chips ? `<div class="file-row">${chips}</div>` : ""}
-    <div class="card-actions">${linkTools(pageLink("#/notes"), `${author.name || "Family"}: ${String(note.body || note.title || "A note").slice(0, 140)}`)}</div>
-    ${reactBar("note", note.id, note.social)}
-    ${commentsBlock("note", note.id, note.social)}
+    <div class="post-actions">
+      ${reactBar("note", note.id, note.social)}
+      <div class="card-actions">${linkTools(pageLink("#/notes"), `${author.name || "Family"}: ${String(note.body || note.title || "A note").slice(0, 140)}`)}</div>
+    </div>
+    ${mode === "slide" ? slideTalk("note", note.id, note.social) : commentsBlock("note", note.id, note.social)}
   </article>`;
+}
+
+function slideTalk(type, id, social) {
+  const count = social?.comments?.length || 0;
+  const line = count ? `<p class="empty">${count} ${count === 1 ? "comment" : "comments"}</p>` : "";
+  return `<section class="comments-block">${line}${commentForm(type, id)}</section>`;
 }
 
 function commentCount(social) {
@@ -784,10 +951,24 @@ function reactBar(type, id, social, kinds) {
 
 function commentsBlock(type, id, social) {
   const comments = Array.isArray(social?.comments) ? social.comments : [];
-  const latest = comments[comments.length - 1];
-  const line = latest ? `<div class="comments">${commentLine(latest)}</div>` : `<p class="empty">No comments yet.</p>`;
-  const href = `#/comments/${encodeURIComponent(type)}/${encodeURIComponent(id)}`;
-  return `<section class="comments-block"><h3>Latest comment</h3>${line}<a class="see-comments" href="${href}">See all comments</a></section>`;
+  const list = comments.length
+    ? `<div class="comments">${comments.map(commentLine).join("")}</div>`
+    : `<p class="empty">No comments yet.</p>`;
+  return `<section class="comments-block"><h3>Comments</h3>${list}${commentForm(type, id)}</section>`;
+}
+
+function commentForm(type, id) {
+  if (!state.user) return `<p class="empty"><a href="#/account">Log in</a> to leave a comment.</p>`;
+  const pick = state.commentPicks?.[`${type}:${id}`];
+  return `<form class="comment-form" data-type="${esc(type)}" data-id="${esc(id)}">
+    <input name="body" placeholder="Write a comment">
+    <div class="comment-tools">
+      <label class="tool">${iconPhoto()}<span>Photo</span><input type="file" accept="image/*" data-comment-file="image"></label>
+      <label class="tool">${iconVideo()}<span>Video</span><input type="file" accept="video/mp4,video/webm,video/quicktime,.mp4,.mov,.webm" data-comment-file="video"></label>
+      <button class="btn quiet" type="submit">Comment</button>
+    </div>
+    ${pick ? `<span class="comment-picked">${esc(pick.name)}</span>` : ""}
+  </form>`;
 }
 
 function commentPlace(type, id) {
@@ -839,12 +1020,7 @@ function commentsView(type, id) {
   const list = comments.length
     ? `<div class="comments">${comments.map(commentLine).join("")}</div>`
     : `<p class="empty">No comments yet.</p>`;
-  const form = state.user
-    ? `<form class="comment-form" data-type="${esc(type)}" data-id="${esc(id)}">
-        <input name="body" placeholder="Write a comment" required>
-        <button class="btn quiet" type="submit">Comment</button>
-      </form>`
-    : `<p class="empty"><a href="#/account">Log in</a> to leave a comment.</p>`;
+  const form = commentForm(type, id);
   return shell(`
     <p><a class="see-comments" href="${esc(place.back)}">${esc(place.backLabel)}</a></p>
     <h2 class="page-title">Comments</h2>
@@ -858,7 +1034,11 @@ function commentsView(type, id) {
 
 function commentLine(comment) {
   const mine = state.user && String(comment.author?.id) === String(state.user.id);
-  return `<p class="comment">${face(comment.author)}<span><strong>${esc(comment.author?.name || "Family")}</strong> ${esc(comment.body)}</span>${mine ? `<button type="button" class="btn quiet" data-action="delete-comment" data-id="${esc(comment.id)}">Delete</button>` : ""}</p>`;
+  const files = Array.isArray(comment.attachments) ? comment.attachments : [];
+  const media = files.map((item) => item.kind === "video"
+    ? filmCover(asset(item.path))
+    : `<img src="${esc(asset(item.path))}" alt="" loading="lazy" decoding="async">`).join("");
+  return `<div class="comment">${face(comment.author)}<div><p><strong>${esc(comment.author?.name || "Family")}</strong> ${esc(comment.body || "")}</p>${media ? `<div class="comment-media">${media}</div>` : ""}</div>${mine ? `<button type="button" class="btn quiet" data-action="delete-comment" data-id="${esc(comment.id)}">Delete</button>` : ""}</div>`;
 }
 
 function familyView() {
@@ -1127,6 +1307,9 @@ function render() {
   } else if (current.name === "messages") {
     document.title = "Messages · Lisa's Recipe Book";
     html = state.user ? shell(messagesView()) : accountGate("Log in to send a message or make a call.");
+  } else if (current.name === "sound") {
+    document.title = "Call sound · Lisa's Recipe Book";
+    html = soundView();
   } else if (current.name === "search") {
     document.title = "Search · Lisa's Recipe Book";
     html = shell(searchView());
@@ -1151,6 +1334,7 @@ function render() {
   if (state.incoming) document.title = `${state.incoming.person?.name || "Someone"} is calling`;
   else if (state.call) document.title = state.call.phase === "live" ? `On a call with ${state.call.person?.name || "family"}` : `Calling ${state.call.person?.name || "family"}`;
   root.innerHTML = html;
+  paintFilmCovers();
   state.menuFresh = false;
   document.body.classList.toggle("menu-open", state.menu);
   attachCallMedia();
@@ -1241,14 +1425,20 @@ function keptLink(url) {
 }
 
 async function refreshPrivate() {
-  if (!state.user) { state.notes = []; state.library = []; state.people = []; return; }
-  const [notes, library, people, recipes] = await Promise.all([
-    api("/api/notes"),
+  if (!state.user) { state.notes = []; state.notesError = ""; state.library = []; state.people = []; return; }
+  try {
+    const notes = await api("/api/notes");
+    state.notes = Array.isArray(notes.notes) ? notes.notes : [];
+    state.notesError = "";
+  } catch (error) {
+    state.notes = [];
+    state.notesError = error.message || "The notepad could not be loaded from the book.";
+  }
+  const [library, people, recipes] = await Promise.all([
     api("/api/library"),
     api("/api/people"),
     api("/api/recipes")
   ]);
-  state.notes = notes.notes;
   state.library = library.items;
   state.people = people.people;
   state.recipes = recipes.recipes;
@@ -1271,6 +1461,24 @@ document.addEventListener("click", async (event) => {
   }
   const button = event.target.closest("[data-action], [data-cuisine], [data-shelf]");
   if (!button) return;
+  if (button.dataset.action === "more-notes") {
+    state.homeNotes = (state.homeNotes || 3) + 3;
+    render();
+    return;
+  }
+  if (button.dataset.action === "jump-note") {
+    document.querySelector(`[data-note="${CSS.escape(String(button.dataset.id || ""))}"]`)?.scrollIntoView({ behavior: "smooth", block: "start" });
+    return;
+  }
+  if (button.dataset.action === "play-film") {
+    const card = button.closest(".film-card");
+    const video = card?.querySelector("video");
+    if (card && video) {
+      card.classList.add("is-playing");
+      video.play().catch(() => {});
+    }
+    return;
+  }
   if (button.closest("a.card")) event.preventDefault();
   if (button.dataset.cuisine) { state.cuisine = button.dataset.cuisine; render(); return; }
   if (button.dataset.shelf) {
@@ -1430,6 +1638,18 @@ document.addEventListener("click", async (event) => {
       render();
     }
     if (action === "retry-world") { state.worldMiss = ""; state.worldError = ""; render(); }
+    if (action === "preview-ringer") {
+      try { await previewCallSound(); }
+      catch { say("The phone did not play that sound. Tap the page once and try again."); }
+      return;
+    }
+    if (action === "clear-ringer") {
+      await clearCallSound();
+      state.ringerName = "";
+      say("Calls will use the book's ring.");
+      render();
+      return;
+    }
     if (action === "sign-out") {
       localStorage.removeItem("lisa-token");
       state.user = null;
@@ -1475,6 +1695,34 @@ document.addEventListener("input", (event) => {
 
 document.addEventListener("change", async (event) => {
   const input = event.target;
+  if (input instanceof HTMLInputElement && input.dataset.commentFile) {
+    const form = input.closest("form");
+    const file = input.files?.[0];
+    input.value = "";
+    if (!form || !file?.size) return;
+    if (file.size > 40_000_000) {
+      say("That video is too long. Try a shorter clip.");
+      return;
+    }
+    const kind = input.dataset.commentFile === "video" ? "video" : "image";
+    const stored = kind === "image" ? await shrinkImage(file) : file;
+    state.commentPicks[`${form.dataset.type}:${form.dataset.id}`] = { file: stored, kind, name: file.name };
+    render();
+    return;
+  }
+  if (input instanceof HTMLInputElement && input.id === "ringer-file") {
+    const file = input.files?.[0];
+    input.value = "";
+    if (!file) return;
+    try {
+      state.ringerName = await saveCallSound(file);
+      say("That sound will play when the book is open and someone calls.");
+      render();
+    } catch (error) {
+      say(error.message || "That sound did not save.");
+    }
+    return;
+  }
   if (!(input instanceof HTMLInputElement) || !input.dataset.notePick) return;
   try {
     const box = document.getElementById("note-body");
@@ -1519,11 +1767,20 @@ async function postNote(form) {
     if (state.editingNote) {
       const payload = { body: text };
       if (text) payload.title = text.split("\n")[0].slice(0, 80);
-      await api(`/api/notes/${state.editingNote}`, { method: "PATCH", json: payload });
+      const editingId = state.editingNote;
+      const result = await api(`/api/notes/${editingId}`, { method: "PATCH", json: payload });
+      const saved = result.note || {};
+      state.notes = state.notes.map((item) => String(item.id) === String(editingId) ? {
+        ...item,
+        ...saved,
+        attachments: saved.attachments?.length ? saved.attachments : item.attachments,
+        author: item.author,
+        social: item.social
+      } : item);
       state.editingNote = "";
       state.noteDraft = "";
-      await refreshPrivate();
       say("Note saved.");
+      refreshPrivate().then(() => render()).catch(() => {});
       return;
     }
     if (!text && !files.length) throw new Error("Write a note, or add a picture or video.");
@@ -1570,13 +1827,25 @@ document.addEventListener("submit", async (event) => {
     if (await deskSubmit(form, data)) return;
     if (form.classList.contains("comment-form")) {
       const text = String(data.body || "").trim();
-      if (!text) throw new Error("Write a comment first.");
       const type = form.dataset.type;
       const id = form.dataset.id;
-      const result = await api("/api/comments", { method: "POST", json: { targetType: type, targetId: id, body: text } });
+      const key = `${type}:${id}`;
+      const picked = state.commentPicks?.[key];
+      if (!text && !picked?.file) throw new Error("Write a comment, or add a picture or video.");
+      const button = form.querySelector("[type=submit]");
+      if (button) button.textContent = "Posting…";
+      const attachments = [];
+      if (picked?.file) {
+        const saved = await uploadPieces(picked.file, picked.name);
+        const kind = picked.kind === "video" || saved.kind === "video" ? "video" : "image";
+        attachments.push({ path: saved.path, name: picked.name, kind });
+      }
+      const result = await api("/api/comments", { method: "POST", json: { targetType: type, targetId: id, body: text, attachments } });
+      delete state.commentPicks[key];
       pushComment(type, id, result.comment || {
         id: `new-${Date.now()}`,
         body: text,
+        attachments,
         createdAt: new Date().toISOString(),
         author: state.user
       });
@@ -2253,6 +2522,22 @@ restoreTimer();
 await rememberIfInstalled();
 offerInstall();
 
+async function openSpokenFind(forced) {
+  const params = new URLSearchParams(location.search);
+  const spoken = String(forced ?? params.get("find") ?? "").trim().slice(0, 160);
+  if (!spoken) {
+    if (forced == null && params.has("find") && (location.hash || "#/") !== "#/search") location.hash = "#/search";
+    return;
+  }
+  state.searchQ = spoken;
+  if ((location.hash || "#/") !== "#/search") location.hash = "#/search";
+  try {
+    state.searchResult = await api(`/api/search?q=${encodeURIComponent(spoken)}`);
+  } catch (error) {
+    state.searchResult = { query: spoken, recipes: [], meals: [], notes: [], films: [], messages: [], missing: [], notice: error.message || "The search did not finish." };
+  }
+}
+
 const boot = await api("/api/health").then(() => api("/api/recipes")).catch((error) => ({ error }));
 if (boot.error) {
   document.getElementById("app").innerHTML = `<p class="boot">${esc(boot.error)}</p>`;
@@ -2265,6 +2550,15 @@ if (boot.error) {
     if (state.user) await refreshPrivate();
   } catch { /* a guest can still read */ }
   bindDesk({ state, api, esc, go, say, face, render, route });
+  state.ringerName = await ringerLabel().catch(() => "");
   setInterval(() => { deskTick().catch(() => {}); }, 2500);
+  await openSpokenFind();
+  window.launchQueue?.setConsumer?.((params) => {
+    try {
+      const next = new URL(params?.targetURL || "", location.origin);
+      const spoken = next.searchParams.get("find") || "";
+      if (spoken) openSpokenFind(spoken);
+    } catch { /* a bad launch just leaves the book where it is */ }
+  });
   render();
 }

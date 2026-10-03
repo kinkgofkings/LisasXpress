@@ -5,6 +5,15 @@
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
+  "launch_handler": { "client_mode": "navigate-existing" },
+  "shortcuts": [
+    {
+      "name": "Find a plate",
+      "short_name": "Find",
+      "description": "Look up a plate in the book",
+      "url": "/?find="
+    }
+  ],
   "background_color": "#fff4f8",
   "theme_color": "#d81b60",
   "icons": [

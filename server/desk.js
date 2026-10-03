@@ -102,6 +102,29 @@ function focus(question) {
   return words.slice(0, 4).join(" ") || String(question || "").trim().slice(0, 80);
 }
 
+function platesAsked(question) {
+  let text = String(question || "").toLowerCase().replace(/['’]/g, "");
+  text = text.replace(/\blazagna\b/g, "lasagna").replace(/\blasagne\b/g, "lasagna");
+  text = text.replace(/[^a-z0-9]+/g, " ").replace(/\s+/g, " ").trim();
+  const lead = /^(hey google|ok google|okay google|please|open|my|recipe|recipes|app|book|lisas|lisa|and|then|find|search|for|look|up|show|me)\b\s*/;
+  for (let pass = 0; pass < 18 && lead.test(text); pass += 1) text = text.replace(lead, "").trim();
+  const dishes = text.split(/\b(?:with|and|plus)\b/).map((part) => part.replace(/\s+/g, " ").trim()).filter((part) => part.length > 1);
+  const asked = (dishes.length ? dishes : [text]).filter(Boolean).slice(0, 4);
+  return asked.length ? asked : [String(question || "").trim().slice(0, 80)];
+}
+
+function plateLabel(dish) {
+  return dish.replace(/\b[a-z]/g, (letter) => letter.toUpperCase());
+}
+
+function foldPlate(value) {
+  return String(value || "").toLowerCase().replace(/\blasagne\b/g, "lasagna").replace(/\blazagna\b/g, "lasagna");
+}
+
+function dishWords(dish) {
+  return dish.split(/\s+/).filter((word) => word.length > 2 && !STOP.has(word));
+}
+
 async function touch(db, userId) {
   const seen = nowIso();
   await db.run(
@@ -376,30 +399,60 @@ async function recipeHits(db, term) {
   );
 }
 
-async function searchRecipes(db, question) {
-  const phrase = focus(question);
-  let rows = phrase ? await recipeHits(db, phrase) : [];
-  if (!rows.length) {
-    const words = phrase.split(/\s+/).filter((word) => word.length > 2);
-    const seen = new Set();
-    for (const word of words) {
-      for (const row of await recipeHits(db, word)) {
-        if (seen.has(row.id)) continue;
-        seen.add(row.id);
-        rows.push(row);
-        if (rows.length >= 8) break;
-      }
-      if (rows.length >= 8) break;
-    }
+function coversDish(title, dish) {
+  const name = foldPlate(title);
+  const words = dishWords(dish);
+  if (!words.length) return false;
+  if (words.length === 1) return name.includes(words[0]);
+  const hits = words.filter((word) => name.includes(word));
+  return name.includes(words.at(-1)) || hits.length >= 2;
+}
+
+function scorePlate(row, words) {
+  const title = foldPlate(row.title);
+  const summary = foldPlate(row.summary);
+  let score = 0;
+  let titleHits = 0;
+  for (const word of words) {
+    if (title.includes(word)) {
+      score += 5;
+      titleHits += 1;
+    } else if (summary.includes(word)) score += 2;
   }
-  return rows.map((row) => ({
-    id: row.id,
-    title: row.title,
-    summary: row.summary,
-    cuisine: row.cuisine,
-    category: row.category,
-    href: `#/recipe/${row.id}`
-  }));
+  if (words.length && titleHits === words.length) score += 6;
+  return score;
+}
+
+async function searchRecipes(db, question) {
+  const found = [];
+  for (const dish of platesAsked(question)) {
+    const words = dishWords(dish);
+    const phrase = words.join(" ");
+    const pool = new Map();
+    const seeds = phrase ? [phrase, ...words] : words;
+    for (const term of seeds) {
+      for (const row of await recipeHits(db, term)) {
+        const score = scorePlate(row, words);
+        const prev = pool.get(row.id);
+        if (coversDish(row.title, dish) && score >= 5 && (!prev || score > prev.score)) pool.set(row.id, { row, score });
+      }
+      if ([...pool.values()].some((item) => item.score >= 11)) break;
+    }
+    const top = [...pool.values()].sort((a, b) => b.score - a.score).slice(0, 3);
+    for (const item of top) {
+      if (found.some((saved) => saved.id === item.row.id)) continue;
+      found.push({
+        id: item.row.id,
+        title: item.row.title,
+        summary: item.row.summary,
+        cuisine: item.row.cuisine,
+        category: item.row.category,
+        href: `#/recipe/${item.row.id}`
+      });
+    }
+    if (found.length >= 8) break;
+  }
+  return found.slice(0, 8);
 }
 
 function spoken(question, recipes, meals) {
@@ -415,23 +468,35 @@ function spoken(question, recipes, meals) {
   return parts.join(" ");
 }
 
+function titleFits(title, dish) {
+  return coversDish(title, dish);
+}
+
 async function libraryMeals(question) {
+  const meals = [];
+  let notice = "";
   try {
-    const world = await worldCatalog({ q: focus(question) });
-    return {
-      meals: (world.meals || []).slice(0, 6).map((meal) => ({
-        id: String(meal.id),
-        title: meal.title,
-        category: meal.category || "",
-        area: meal.area || "",
-        image: meal.image || "",
-        href: `#/world/${meal.id}`
-      })),
-      notice: world.notice || ""
-    };
+    for (const dish of platesAsked(question)) {
+      const world = await worldCatalog({ q: dish });
+      if (/start with|here are desserts/i.test(world.notice || "")) continue;
+      if (!notice && world.notice) notice = world.notice;
+      for (const meal of world.meals || []) {
+        if (!titleFits(meal.title, dish) || meals.some((saved) => saved.id === String(meal.id))) continue;
+        meals.push({
+          id: String(meal.id),
+          title: meal.title,
+          category: meal.category || "",
+          area: meal.area || "",
+          image: meal.image || "",
+          href: `#/world/${meal.id}`
+        });
+        if (meals.length >= 6) return { meals, notice };
+      }
+    }
   } catch {
     return { meals: [], notice: "" };
   }
+  return { meals, notice };
 }
 
 async function hostVoice(ai, question, recipes, meals) {
@@ -460,9 +525,15 @@ export async function searchBook(db, userId, question) {
   const q = String(question || "").trim();
   if (!q) throw deskFail("Type something to look for.");
   if (userId) await touch(db, userId);
+  const asked = platesAsked(q);
   const recipes = await searchRecipes(db, q);
-  const world = recipes.length >= 3 ? { meals: [], notice: "" } : await libraryMeals(q);
-  const result = { query: q, recipes, meals: world.meals, notice: world.notice, notes: [], films: [], messages: [] };
+  const world = await libraryMeals(q);
+  const titles = [...recipes, ...world.meals].map((item) => foldPlate(item.title));
+  const missing = asked.filter((dish) => {
+    const noun = dishWords(dish).at(-1) || dish;
+    return !titles.some((title) => title.includes(noun));
+  }).map(plateLabel);
+  const result = { query: q, asked: asked.map(plateLabel), missing, recipes, meals: world.meals, notice: world.notice, notes: [], films: [], messages: [] };
   if (!userId) return result;
   const terms = focus(q).split(/\s+/).filter(Boolean);
   const needles = [focus(q), ...terms].filter((term, index, list) => term && list.indexOf(term) === index);

@@ -3,6 +3,82 @@ let deps = {};
 let audioCtx = null;
 let ringTimer = null;
 let ticking = false;
+let ringFile = null;
+let ringAudio = null;
+const RINGER_DB = "lisa-call-sound";
+
+function openRingerDb() {
+  return new Promise((resolve, reject) => {
+    const open = indexedDB.open(RINGER_DB, 1);
+    open.onupgradeneeded = () => open.result.createObjectStore("sound");
+    open.onsuccess = () => resolve(open.result);
+    open.onerror = () => reject(open.error);
+  });
+}
+
+async function readRinger() {
+  const db = await openRingerDb();
+  return new Promise((resolve) => {
+    const request = db.transaction("sound", "readonly").objectStore("sound").get("call");
+    request.onsuccess = () => resolve(request.result || null);
+    request.onerror = () => resolve(null);
+  });
+}
+
+export async function ringerLabel() {
+  const saved = await readRinger().catch(() => null);
+  return saved?.name || "";
+}
+
+export async function saveCallSound(file) {
+  const type = String(file?.type || "");
+  const name = String(file?.name || "Call sound");
+  if (!type.startsWith("audio/") && !/\.(mp3|m4a|wav|ogg|aac)$/i.test(name)) {
+    throw new Error("Choose a sound file.");
+  }
+  if (!file.size || file.size > 2_000_000) throw new Error("Choose a short sound, under 2 MB.");
+  const db = await openRingerDb();
+  await new Promise((resolve, reject) => {
+    const tx = db.transaction("sound", "readwrite");
+    tx.objectStore("sound").put({ name, blob: file }, "call");
+    tx.oncomplete = resolve;
+    tx.onerror = () => reject(tx.error);
+  });
+  if (ringFile) URL.revokeObjectURL(ringFile);
+  ringFile = "";
+  return name;
+}
+
+export async function clearCallSound() {
+  const db = await openRingerDb();
+  await new Promise((resolve) => {
+    const tx = db.transaction("sound", "readwrite");
+    tx.objectStore("sound").delete("call");
+    tx.oncomplete = resolve;
+    tx.onerror = resolve;
+  });
+  if (ringFile) URL.revokeObjectURL(ringFile);
+  ringFile = "";
+}
+
+async function callSoundUrl() {
+  if (ringFile) return ringFile;
+  const saved = await readRinger();
+  if (!saved?.blob) return "";
+  ringFile = URL.createObjectURL(saved.blob);
+  return ringFile;
+}
+
+export async function previewCallSound() {
+  const url = await callSoundUrl();
+  if (!url) {
+    warmRinger();
+    ringPulse();
+    return;
+  }
+  const audio = new Audio(url);
+  await audio.play();
+}
 
 export function bindDesk(next) {
   deps = next;
@@ -42,13 +118,28 @@ function ringPulse() {
   }
 }
 
+function buzz() {
+  navigator.vibrate?.([400, 120, 400, 120, 400]);
+}
+
 function startRing(person, mode) {
   warmRinger();
+  buzz();
   if (!ringTimer) {
-    ringPulse();
-    ringTimer = setInterval(() => {
+    callSoundUrl().then((url) => {
+      if (url) {
+        ringAudio = ringAudio || new Audio();
+        ringAudio.loop = true;
+        if (ringAudio.src !== url) ringAudio.src = url;
+        ringAudio.play().catch(() => ringPulse());
+        return;
+      }
       ringPulse();
-      navigator.vibrate?.([300, 140, 300, 140, 300]);
+    }).catch(() => ringPulse());
+    ringTimer = setInterval(() => {
+      buzz();
+      if (ringAudio && !ringAudio.paused) return;
+      ringPulse();
     }, 2800);
   }
   document.title = `${person?.name || "Someone"} is calling`;
@@ -69,6 +160,10 @@ function startRing(person, mode) {
 export function stopRing() {
   if (ringTimer) clearInterval(ringTimer);
   ringTimer = null;
+  if (ringAudio) {
+    ringAudio.pause();
+    ringAudio.currentTime = 0;
+  }
   navigator.vibrate?.(0);
   navigator.serviceWorker?.ready.then((registration) => {
     registration.getNotifications({ tag: "lisa-call" }).then((notes) => notes.forEach((note) => note.close()));
@@ -207,8 +302,11 @@ export function searchView() {
   const state = deps.state;
   const found = state.searchResult;
   const host = state.hostAnswer;
+  const fromLink = new URLSearchParams(location.search).has("find");
+  const missing = (found?.missing || []).map((name) => `<p class="empty">${esc(name)} is not in the book yet.</p>`).join("");
   return `<h2 class="page-title">Search</h2>
     <p>Look through this book, the notes, the films, and the open library. Ask the host a question and it answers from those real plates.</p>
+    ${fromLink ? `<p class="empty">Opened from a link for “${esc(state.searchQ || "a plate")}”.</p>` : ""}
     <form id="search-form" class="toolbar">
       <input name="q" required placeholder="Search the book" value="${esc(state.searchQ || "")}">
       <button class="btn" type="submit">Search</button>
@@ -220,6 +318,7 @@ export function searchView() {
     </form>
     ${host ? `<section class="panel host-answer"><p>${esc(host.answer)}</p>${host.notice ? `<p class="empty">${esc(host.notice)}</p>` : ""}${hitList(host.recipes, host.meals)}</section>` : ""}
     ${found ? `<div class="stack">
+      ${missing}
       ${found.notice ? `<p class="empty">${esc(found.notice)}</p>` : ""}
       ${group("In the book", found.recipes)}
       ${group("Open library", found.meals)}
