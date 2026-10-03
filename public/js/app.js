@@ -478,13 +478,12 @@ function studio() {
       </form>
       <form id="film-form" class="panel">
         <h3>Your films</h3>
-        <div class="field"><label>Title<input name="title" required></label></div>
-        <div class="field"><label>YouTube description<textarea name="description" placeholder="What you would paste into YouTube"></textarea></label></div>
-        <div class="field"><label>Video file<input name="file" type="file" accept="video/mp4,video/webm"></label></div>
-        <video id="live-preview" class="frame" autoplay muted playsinline style="display:${state.recording ? "block" : "none"}"></video>
+        <div class="field"><label>Title<input name="title" required value="${esc(state.filmDraft.title)}"></label></div>
+        <div class="field"><label>YouTube description<textarea name="description" placeholder="What you would paste into YouTube">${esc(state.filmDraft.description)}</textarea></label></div>
+        <div class="field"><label>Video file<input name="file" type="file" accept="video/mp4,video/webm,video/quicktime"></label></div>
+        ${cameraStage()}
         <div class="actions">
           <button class="btn moss" type="submit">Save film</button>
-          <button class="btn quiet" type="button" data-action="record">${state.recording?.on ? "Stop and use this take" : "Record from this camera"}</button>
         </div>
       </form>
     </div>
@@ -497,21 +496,44 @@ function studio() {
   `);
 }
 
+function cameraStage() {
+  const rec = state.recording;
+  if (!rec?.stream && !rec?.url) return `<button class="btn quiet" type="button" data-action="camera-open">Open camera</button>`;
+  const live = Boolean(rec.stream);
+  return `<div class="stage ${live ? "" : "review"}">
+    <video id="live-preview" playsinline ${live ? "autoplay muted" : `controls src="${esc(rec.url)}"`}></video>
+    <div class="stage-bar">
+      ${live && !rec.on ? `<button class="stage-side" type="button" data-action="camera-flip">Flip</button>` : `<span class="stage-side" id="rec-clock">${rec.on ? "0:00" : ""}</span>`}
+      ${live
+        ? `<button class="shutter ${rec.on ? "on" : ""}" type="button" data-action="record" aria-label="${rec.on ? "Stop recording" : "Start recording"}"><span></span>${rec.on ? "Stop" : "Record"}</button>`
+        : `<button class="stage-side" type="button" data-action="camera-open">Retake</button>`}
+      <button class="stage-side" type="button" data-action="camera-close">Close</button>
+    </div>
+  </div>${rec.url ? `<p class="empty">Take ready. Save the film when the title looks right.</p>` : ""}`;
+}
+
 function libraryCard(item) {
   const id = youtubeId(item.url);
+  const editing = String(state.libraryEdit) === String(item.id);
   return `<article class="film">
-    <p class="kicker">${esc(item.kind)}</p>
-    <h3>${esc(item.title)}</h3>
-    ${item.filePath ? `<video src="${esc(asset(item.filePath))}" controls></video>` : ""}
-    ${id ? `<iframe class="frame" src="https://www.youtube-nocookie.com/embed/${esc(id)}" allowfullscreen></iframe>` : ""}
-    ${item.notes ? `<p>${esc(item.notes)}</p>` : ""}
-    ${item.description ? `<p>${esc(item.description)}</p>` : ""}
-    <div class="actions">
-      ${item.url ? `<button class="btn quiet" data-action="open-source" data-url="${esc(item.url)}" data-title="${esc(item.title)}">Open inside the book</button>` : ""}
-      ${item.description ? `<button class="btn quiet" data-action="copy" data-text="${esc(`${item.title}\n\n${item.description}`)}">Copy YouTube text</button>` : ""}
-      ${item.kind === "film" ? `<button class="btn quiet" data-action="open-source" data-url="https://www.youtube.com/upload" data-title="YouTube upload">Open YouTube upload</button>` : ""}
-      <button class="btn danger" data-action="delete-library" data-id="${item.id}">Remove</button>
+    <div class="card-tools">
+      <p class="kicker">${esc(item.kind)}</p>
+      <button class="btn quiet" type="button" data-action="edit-library" data-id="${esc(item.id)}">Edit</button>
+      <button class="btn danger" type="button" data-action="delete-library" data-id="${esc(item.id)}">Delete</button>
     </div>
+    ${editing ? `<form id="library-edit-form" class="stack">
+      <input type="hidden" name="id" value="${esc(item.id)}">
+      <div class="field"><label>Title<input name="title" required value="${esc(item.title)}"></label></div>
+      ${item.kind === "film" ? "" : `<div class="field"><label>Link<input name="url" required value="${esc(item.url)}"></label></div>`}
+      <div class="field"><label>Note<textarea name="notes">${esc(item.notes || "")}</textarea></label></div>
+      <div class="field"><label>Description<textarea name="description">${esc(item.description || "")}</textarea></label></div>
+      <div class="actions"><button class="btn" type="submit">Save changes</button><button class="btn quiet" type="button" data-action="cancel-library-edit">Cancel</button></div>
+    </form>` : `<h3>${esc(item.title)}</h3>`}
+    ${item.filePath ? `<video src="${esc(asset(item.filePath))}" controls playsinline></video>` : ""}
+    ${id ? `<iframe class="frame" src="https://www.youtube-nocookie.com/embed/${esc(id)}" allowfullscreen></iframe>` : ""}
+    ${!editing && item.notes ? `<p>${esc(item.notes)}</p>` : ""}
+    ${!editing && item.description ? `<p>${esc(item.description)}</p>` : ""}
+    ${!editing && item.url ? `<div class="actions"><button class="btn quiet" data-action="open-source" data-url="${esc(item.url)}" data-title="${esc(item.title)}">Open inside the book</button></div>` : ""}
   </article>`;
 }
 
@@ -628,7 +650,11 @@ function render() {
   }
   root.innerHTML = html;
   const preview = document.getElementById("live-preview");
-  if (preview && state.recording?.stream) preview.srcObject = state.recording.stream;
+  if (preview && state.recording?.stream) {
+    preview.srcObject = state.recording.stream;
+    preview.muted = true;
+    preview.play?.().catch(() => {});
+  }
   paintInstall();
 }
 
@@ -717,7 +743,27 @@ document.addEventListener("click", async (event) => {
       const data = await api(`/api/recipes/${button.dataset.id}/media/${button.dataset.media}`, { method: "DELETE" });
       replaceRecipe(data.recipe);
     }
-    if (action === "delete-note" && confirm("Remove this note?")) {
+    if (action === "edit-note") {
+      const note = state.notes.find((item) => String(item.id) === button.dataset.id);
+      if (!note) return;
+      state.editingNote = note.id;
+      state.noteDraft = note.body || "";
+      state.noteFiles.forEach((item) => URL.revokeObjectURL(item.url));
+      state.noteFiles = [];
+      render();
+      document.querySelector(".composer")?.scrollIntoView({ block: "start" });
+      document.getElementById("note-body")?.focus();
+    }
+    if (action === "cancel-note") {
+      state.editingNote = "";
+      state.noteDraft = "";
+      render();
+    }
+    if (action === "delete-note" && confirm("Delete this note?")) {
+      if (String(state.editingNote) === String(button.dataset.id)) {
+        state.editingNote = "";
+        state.noteDraft = "";
+      }
       await api(`/api/notes/${button.dataset.id}`, { method: "DELETE" });
       await refreshPrivate();
       say("Note removed.");
@@ -732,10 +778,21 @@ document.addEventListener("click", async (event) => {
       if (box) state.noteDraft = box.value;
       render();
     }
-    if (action === "delete-library") {
+    if (action === "edit-library") { rememberFilm(); state.libraryEdit = button.dataset.id; render(); }
+    if (action === "cancel-library-edit") { state.libraryEdit = ""; render(); }
+    if (action === "delete-library" && confirm("Delete this?")) {
       await api(`/api/library/${button.dataset.id}`, { method: "DELETE" });
+      if (String(state.libraryEdit) === String(button.dataset.id)) state.libraryEdit = "";
       await refreshPrivate();
+      say("Deleted.");
       render();
+    }
+    if (action === "camera-open") await openCamera(state.recording?.facing || "environment");
+    if (action === "camera-flip") await openCamera(state.recording?.facing === "user" ? "environment" : "user");
+    if (action === "camera-close") closeCamera();
+    if (action === "record") {
+      if (state.recording?.on) stopRecording();
+      else await startRecording();
     }
     if (action === "keep-recipe") {
       const data = await api(`/api/world/${button.dataset.id}/keep`, { method: "POST" });
@@ -745,7 +802,6 @@ document.addEventListener("click", async (event) => {
     }
     if (action === "retry-world") { state.worldMiss = ""; state.worldError = ""; render(); }
     if (action === "sign-out") { localStorage.removeItem("lisa-token"); state.user = null; go("#/"); }
-    if (action === "record") await toggleRecord();
   } catch (error) {
     if (error?.name !== "AbortError") say(error.message || "That did not work.");
   }
@@ -760,6 +816,7 @@ document.addEventListener("input", (event) => {
     if (field) { field.focus(); field.setSelectionRange(caret, caret); }
   }
   if (event.target.id === "note-body") state.noteDraft = event.target.value;
+  if (event.target.closest?.("#film-form")) rememberFilm();
   if (event.target.id === "shelf-q") {
     state.shelfQ = event.target.value;
     state.shelfFocus = true;
@@ -780,7 +837,7 @@ document.addEventListener("change", async (event) => {
   for (const file of incoming) {
     if (state.noteFiles.length >= 6) { warned = "Six files is the limit for one note."; break; }
     const kind = file.type.startsWith("image/") ? "image" : file.type.startsWith("video/") ? "video" : "file";
-    if (kind !== "image" && file.size > 1_200_000) {
+    if (kind !== "image" && file.size > 1_500_000) {
       warned = kind === "video" ? "That video is too big to keep. Try a short clip." : "That file is too large.";
       continue;
     }
@@ -853,17 +910,28 @@ document.addEventListener("submit", async (event) => {
     }
     if (form.id === "note-form") {
       const text = String(data.body || "").trim();
-      if (!text && !state.noteFiles.length) throw new Error("Write a note, or add a picture.");
-      const body = new FormData();
-      body.set("body", text);
-      state.noteFiles.forEach((item) => body.append("file", item.file, item.name || "file"));
-      await api("/api/notes", { method: "POST", body });
-      state.noteFiles.forEach((item) => URL.revokeObjectURL(item.url));
-      state.noteFiles = [];
-      state.noteDraft = "";
-      await refreshPrivate();
-      say("Posted.");
-      render();
+      if (state.editingNote) {
+        const payload = { body: text };
+        if (text) payload.title = text.split("\n")[0].slice(0, 80);
+        await api(`/api/notes/${state.editingNote}`, { method: "PATCH", json: payload });
+        state.editingNote = "";
+        state.noteDraft = "";
+        await refreshPrivate();
+        say("Note saved.");
+        render();
+      } else {
+        if (!text && !state.noteFiles.length) throw new Error("Write a note, or add a picture.");
+        const body = new FormData();
+        body.set("body", text);
+        state.noteFiles.forEach((item) => body.append("file", item.file, item.name || "file"));
+        await api("/api/notes", { method: "POST", body });
+        state.noteFiles.forEach((item) => URL.revokeObjectURL(item.url));
+        state.noteFiles = [];
+        state.noteDraft = "";
+        await refreshPrivate();
+        say("Posted.");
+        render();
+      }
     }
     if (form.id === "link-form") {
       await api("/api/library", { method: "POST", json: data });
@@ -872,13 +940,27 @@ document.addEventListener("submit", async (event) => {
       render();
     }
     if (form.id === "film-form") {
+      rememberFilm();
       const body = new FormData(form);
-      if (state.recording?.blob && !body.get("file")?.size) body.set("file", state.recording.blob, "lisa-film.webm");
+      const take = state.recording?.blob;
+      if (take && !body.get("file")?.size) {
+        if (take.size > 1_500_000) throw new Error("That take is too long to keep. Record a shorter one.");
+        const ext = take.type.includes("mp4") ? "mp4" : "webm";
+        body.set("file", take, `lisa-film.${ext}`);
+      }
       body.set("kind", "film");
       await api("/api/library", { method: "POST", body });
-      state.recording = null;
+      closeCamera();
+      state.filmDraft = { title: "", description: "" };
       await refreshPrivate();
       say("Film saved in your studio.");
+      render();
+    }
+    if (form.id === "library-edit-form") {
+      await api(`/api/library/${data.id}`, { method: "PATCH", json: data });
+      state.libraryEdit = "";
+      await refreshPrivate();
+      say("Saved.");
       render();
     }
   } catch (error) {
@@ -935,24 +1017,125 @@ function replaceRecipe(recipe) {
 }
 
 async function toggleRecord() {
-  if (state.recording?.on && state.recording.recorder) {
-    state.recording.recorder.stop();
+  if (state.recording?.on) stopRecording();
+  else await startRecording();
+}
+
+let recClock = null;
+let cameraClosing = false;
+
+function rememberFilm() {
+  const form = document.getElementById("film-form");
+  if (!form) return;
+  const data = new FormData(form);
+  state.filmDraft = {
+    title: String(data.get("title") || ""),
+    description: String(data.get("description") || "")
+  };
+}
+
+function stopClock() {
+  clearInterval(recClock);
+  recClock = null;
+}
+
+function startClock() {
+  stopClock();
+  recClock = setInterval(() => {
+    const el = document.getElementById("rec-clock");
+    if (!el || !state.recording?.on || !state.recording.started) return;
+    const seconds = Math.max(0, Math.floor((Date.now() - state.recording.started) / 1000));
+    el.textContent = `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
+  }, 250);
+}
+
+function recorderMime() {
+  if (typeof MediaRecorder === "undefined") return "";
+  return ["video/mp4", "video/webm;codecs=vp8,opus", "video/webm"].find((type) => MediaRecorder.isTypeSupported(type)) || "";
+}
+
+async function openCamera(facing = "environment") {
+  rememberFilm();
+  if (!navigator.mediaDevices?.getUserMedia) {
+    say("This phone cannot open the camera in the book.");
     return;
   }
-  const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-  const mime = MediaRecorder.isTypeSupported("video/webm") ? "video/webm" : "";
-  const recorder = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
+  state.recording?.stream?.getTracks().forEach((track) => track.stop());
+  if (state.recording?.url) URL.revokeObjectURL(state.recording.url);
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      audio: true,
+      video: { facingMode: { ideal: facing }, width: { ideal: 640 }, height: { ideal: 480 } }
+    });
+  } catch {
+    say("Allow the camera, then tap Open camera again.");
+    return;
+  }
+  state.recording = { stream, facing, on: false, blob: null, url: "" };
+  render();
+  document.querySelector(".stage")?.scrollIntoView({ block: "center" });
+}
+
+async function startRecording() {
+  if (!state.recording?.stream) return openCamera();
+  if (typeof MediaRecorder === "undefined") {
+    say("This phone can show the camera, but it cannot record here. Choose a video file instead.");
+    return;
+  }
+  const mime = recorderMime();
+  const stream = state.recording.stream;
+  const facing = state.recording.facing;
+  let recorder;
+  try {
+    recorder = new MediaRecorder(stream, {
+      ...(mime ? { mimeType: mime } : {}),
+      videoBitsPerSecond: 500_000,
+      audioBitsPerSecond: 64_000
+    });
+  } catch {
+    say("This phone cannot record in the book. Choose a video file instead.");
+    return;
+  }
   const chunks = [];
+  cameraClosing = false;
   recorder.ondataavailable = (event) => { if (event.data.size) chunks.push(event.data); };
   recorder.onstop = () => {
     stream.getTracks().forEach((track) => track.stop());
-    state.recording = { blob: new Blob(chunks, { type: recorder.mimeType || "video/webm" }), on: false };
-    say("Take ready. Save the film when the title is filled in.");
+    stopClock();
+    if (cameraClosing) {
+      state.recording = null;
+      render();
+      return;
+    }
+    const blob = new Blob(chunks, { type: recorder.mimeType || mime || "video/webm" });
+    rememberFilm();
+    state.recording = { blob, url: URL.createObjectURL(blob), on: false, facing };
     render();
   };
   recorder.start();
-  state.recording = { stream, recorder, on: true };
+  state.recording = { stream, recorder, facing, on: true, started: Date.now(), blob: null, url: "" };
+  rememberFilm();
   render();
+  startClock();
+}
+
+function stopRecording() {
+  if (state.recording?.recorder?.state === "recording") state.recording.recorder.stop();
+}
+
+function closeCamera() {
+  rememberFilm();
+  cameraClosing = true;
+  stopClock();
+  const rec = state.recording;
+  if (rec?.url) URL.revokeObjectURL(rec.url);
+  if (rec?.recorder?.state === "recording") rec.recorder.stop();
+  else {
+    rec?.stream?.getTracks().forEach((track) => track.stop());
+    state.recording = null;
+    render();
+  }
 }
 
 window.addEventListener("hashchange", () => { state.reader = null; render(); });
