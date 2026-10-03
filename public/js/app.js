@@ -66,6 +66,22 @@ async function shrinkImage(file) {
   }
 }
 
+async function uploadPieces(file, name) {
+  const started = await api("/api/media", {
+    method: "POST",
+    json: { mime: String(file.type || "").split(";")[0], size: file.size, name: name || file.name || "file" }
+  });
+  const part = started.partSize || 800_000;
+  for (let offset = 0, idx = 0; offset < file.size; offset += part, idx += 1) {
+    await api(`/api/media/parts?path=${encodeURIComponent(started.path)}&idx=${idx}`, {
+      method: "PUT",
+      body: file.slice(offset, offset + part),
+      headers: { "Content-Type": "application/octet-stream" }
+    });
+  }
+  return started;
+}
+
 async function api(path, options = {}) {
   const headers = { ...(options.headers || {}) };
   const token = localStorage.getItem("lisa-token");
@@ -302,7 +318,6 @@ function recipeView(recipe) {
           <button class="btn quiet" data-action="copy" data-text="${esc(`${shareText}\n${link}`)}">Copy link</button>
           <a class="btn quiet" href="sms:?&body=${encodeURIComponent(`${shareText} ${link}`)}">Text</a>
           <a class="btn quiet" href="mailto:?subject=${encodeURIComponent(recipe.title)}&body=${encodeURIComponent(`${recipe.summary}\n\n${link}`)}">Email</a>
-          ${recipe.youtube ? `<a class="btn quiet" href="${esc(recipe.youtube)}" target="_blank" rel="noopener">Watch on YouTube</a>` : ""}
           ${recipe.world
             ? (kept
               ? `<a class="btn" href="#/recipe/${kept.id}">Open in your book</a>`
@@ -319,6 +334,7 @@ function recipeView(recipe) {
           <button class="btn moss" data-action="timer-start">${timer.running ? "Pause" : "Start"}</button>
           <button class="btn quiet" data-action="timer-reset">Reset</button>
         </div>
+        ${youtubeId(recipe.youtube) ? `<div class="watch"><iframe src="https://www.youtube-nocookie.com/embed/${esc(youtubeId(recipe.youtube))}?rel=0&playsinline=1" title="${esc(recipe.title)}" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; fullscreen" allowfullscreen></iframe></div>` : ""}
         <h3>Ingredients</h3>
         <ul>${recipe.ingredients.map((item) => `<li>${esc(item)}</li>`).join("")}</ul>
         <h3>Method</h3>
@@ -455,7 +471,6 @@ function notePost(note) {
       </div>
     </header>
     ${note.body ? `<p>${esc(note.body)}</p>` : ""}
-    ${tiktokFrom(note.body)}
     ${media ? `<div class="post-media ${visual.length > 1 ? "many" : "one"}">${media}</div>` : ""}
     ${chips ? `<div class="file-row">${chips}</div>` : ""}
   </article>`;
@@ -469,17 +484,16 @@ function when(iso) {
 
 function studio() {
   if (!state.user) return accountGate("Log in to save films and links.");
-  const saved = state.library.filter((item) => item.kind !== "film");
+  const saved = state.library.filter((item) => item.kind !== "film" && keptLink(item.url));
   const films = state.library.filter((item) => item.kind === "film");
   return shell(`
     <h2 class="page-title">Studio</h2>
-    <p>Save a TikTok, Facebook post, or YouTube video for later. Record a film here, or upload one, and keep the YouTube description with it.</p>
+    <p>Save a YouTube video, or a video file you host yourself. Record a film here, or upload one.</p>
     <div class="split">
       <form id="link-form" class="panel">
         <h3>Save for later</h3>
-        <div class="field"><label>Where<select name="kind"><option value="youtube">YouTube</option><option value="tiktok">TikTok</option><option value="facebook">Facebook</option></select></label></div>
         <div class="field"><label>Title<input name="title" required></label></div>
-        <div class="field"><label>Link<input name="url" required placeholder="https://"></label></div>
+        <div class="field"><label>Link<input name="url" required placeholder="YouTube, or a video you host"></label></div>
         <div class="field"><label>Why you saved it<textarea name="notes"></textarea></label></div>
         <button class="btn" type="submit">Save link</button>
       </form>
@@ -537,12 +551,11 @@ function libraryCard(item) {
       <div class="actions"><button class="btn" type="submit">Save changes</button><button class="btn quiet" type="button" data-action="cancel-library-edit">Cancel</button></div>
     </form>` : `<h3>${esc(item.title)}</h3>`}
     ${item.filePath ? `<video src="${esc(asset(item.filePath))}" controls playsinline></video>` : ""}
-    ${tiktokLink(item.url) ? tiktokPlayer(item.url, item.title) : ""}
-    ${facebookLink(item.url) ? facebookPlayer(item.url, item.title) : ""}
-    ${id ? `<iframe class="frame" src="https://www.youtube-nocookie.com/embed/${esc(id)}" allowfullscreen></iframe>` : ""}
+    ${hostedVideo(item.url) ? `<video src="${esc(item.url)}" controls playsinline></video>` : ""}
+    ${id ? `<iframe class="frame" src="https://www.youtube-nocookie.com/embed/${esc(id)}?rel=0&playsinline=1" title="${esc(item.title)}" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; fullscreen" allowfullscreen></iframe>` : ""}
     ${!editing && item.notes ? `<p>${esc(item.notes)}</p>` : ""}
     ${!editing && item.description ? `<p>${esc(item.description)}</p>` : ""}
-    ${!editing && item.url ? `<div class="actions"><button class="btn quiet" data-action="open-source" data-url="${esc(item.url)}" data-title="${esc(item.title)}">Open inside the book</button></div>` : ""}
+    ${!editing && item.url && !id && !hostedVideo(item.url) ? `<div class="actions"><button class="btn quiet" data-action="open-source" data-url="${esc(item.url)}" data-title="${esc(item.title)}">Open inside the book</button></div>` : ""}
   </article>`;
 }
 
@@ -665,7 +678,6 @@ function render() {
     preview.play?.().catch(() => {});
   }
   paintInstall();
-  mountTikToks();
 }
 
 async function openSource(url, title, from) {
@@ -675,20 +687,8 @@ async function openSource(url, title, from) {
     state.reader.fromId = from.id;
     state.reader.stack = [];
   }
-  if (isTikTok(url) || isFacebook(url)) {
-    state.reader.loading = true;
-    render();
-    try {
-      const clip = isTikTok(url) ? await loadTikTok(url) : await loadFacebook(url);
-      const html = isTikTok(url) ? tiktokBlock(clip) : facebookBlock(clip);
-      state.reader.loading = false;
-      state.reader.stack.push({ title: clip.title || title || "Video", url: clip.url || url, html });
-      render();
-    } catch (error) {
-      state.reader.loading = false;
-      state.reader = null;
-      say(error.message);
-    }
+  if (socialLink(url)) {
+    say("TikTok and Facebook stay out of the book.");
     return;
   }
   const watch = watchPage(url, title);
@@ -728,130 +728,31 @@ function watchFrame(src, title) {
   return `<div class="watch"><iframe src="${esc(src)}" title="${esc(title)}" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; fullscreen" allowfullscreen></iframe></div>`;
 }
 
-function isFacebook(url) {
+function linkHost(url) {
   try {
-    const host = new URL(url).hostname.replace(/^www\./, "");
-    return host.endsWith("facebook.com") || host === "fb.watch";
+    return new URL(url).hostname.replace(/^www\./, "").toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
+function socialLink(url) {
+  const host = linkHost(url);
+  return host.endsWith("tiktok.com") || host.endsWith("facebook.com") || host === "fb.watch" || host.endsWith("fb.com") || host.endsWith("instagram.com");
+}
+
+function hostedVideo(url) {
+  try {
+    const parsed = new URL(url);
+    if (!["http:", "https:"].includes(parsed.protocol) || socialLink(url)) return false;
+    return /\.(mp4|webm|mov|m4v|ogg)$/i.test(parsed.pathname);
   } catch {
     return false;
   }
 }
 
-function facebookLink(url) {
-  return isFacebook(url);
-}
-
-function facebookPlayer(url, title) {
-  const preview = state.previews[url];
-  if (!preview || preview.pending) {
-    ensurePreview(url);
-    return `<p class="empty">Finding that Facebook video…</p>`;
-  }
-  if (preview.error) return `<p class="empty">${esc(preview.error)}</p>`;
-  return facebookBlock({ ...preview, title: preview.title || title });
-}
-
-function facebookBlock(clip) {
-  if (clip?.embeddable && clip.frame) return watchFrame(clip.frame, clip.title || "Facebook");
-  const picture = clip?.thumbnail
-    ? `<img class="fb-thumb" src="${esc(clip.thumbnail)}" alt="" referrerpolicy="no-referrer">`
-    : "";
-  const note = clip?.reason || "Facebook will not play this video inside the book. Open it on Facebook to watch it.";
-  const href = clip?.url || "";
-  return `<div class="fb-hold">${picture}<p>${esc(note)}</p>${href ? `<a class="btn" href="${esc(href)}" target="_blank" rel="noopener">Watch on Facebook</a>` : ""}</div>`;
-}
-
-async function loadFacebook(url) {
-  const saved = state.previews[url];
-  if (saved?.provider === "facebook") return saved;
-  const data = await api(`/api/watch?url=${encodeURIComponent(url)}`);
-  state.previews[url] = data;
-  return data;
-}
-
-function isTikTok(url) {
-  try {
-    return new URL(url).hostname.replace(/^www\./, "").endsWith("tiktok.com");
-  } catch {
-    return false;
-  }
-}
-
-function tiktokFrom(text) {
-  const url = String(text || "").match(/https?:\/\/(?:[\w-]+\.)?tiktok\.com\/[^\s)]+/i)?.[0]?.replace(/[.,)]+$/, "");
-  return url ? tiktokPlayer(url, "TikTok") : "";
-}
-
-function tiktokLink(url) {
-  return isTikTok(url);
-}
-
-function tiktokPlayer(url, title) {
-  const localId = String(url || "").match(/\/video\/(\d+)/)?.[1] || "";
-  const preview = state.previews[url];
-  const videoId = localId || preview?.videoId || "";
-  if (!videoId) {
-    if (!preview) ensurePreview(url);
-    if (preview?.thumbnail) {
-      return `<div class="tiktok-hold"><img class="tiktok-thumb" src="${esc(preview.thumbnail)}" alt="${esc(title || "TikTok")}"></div>`;
-    }
-    return `<p class="empty">${esc(preview?.error || "Finding that TikTok…")}</p>`;
-  }
-  const cite = preview?.url || url;
-  return tiktokBlock({ videoId, url: cite, author: preview?.author, title });
-}
-
-function tiktokBlock(clip) {
-  if (!clip?.videoId) return `<p class="empty">${esc(clip?.error || "That TikTok could not be opened.")}</p>`;
-  const cite = clip.url;
-  const label = clip.author ? `@${clip.author}` : (clip.title || "Watch on TikTok");
-  return `<div class="tiktok-hold"><blockquote class="tiktok-embed" cite="${esc(cite)}" data-video-id="${esc(clip.videoId)}" style="max-width:100%;min-width:0"><section><a href="${esc(cite)}" target="_blank" rel="noopener">${esc(label)}</a></section></blockquote></div>`;
-}
-
-async function loadTikTok(url) {
-  const saved = state.previews[url];
-  if (saved?.videoId) return saved;
-  const localId = String(url).match(/\/video\/(\d+)/)?.[1] || "";
-  if (localId) {
-    const clip = { videoId: localId, url, title: "", author: "" };
-    state.previews[url] = clip;
-    return clip;
-  }
-  const data = await api(`/api/watch?url=${encodeURIComponent(url)}`);
-  state.previews[url] = data;
-  return data;
-}
-
-function ensurePreview(url) {
-  if (state.previews[url]) return;
-  state.previews[url] = { pending: true };
-  api(`/api/watch?url=${encodeURIComponent(url)}`)
-    .then((data) => { state.previews[url] = data; render(); })
-    .catch((error) => { state.previews[url] = { error: error.message }; render(); });
-}
-
-function mountTikToks() {
-  const nodes = [...document.querySelectorAll(".tiktok-embed:not([data-mounted])")];
-  if (!nodes.length) return;
-  const paint = (node) => {
-    node.dataset.mounted = "1";
-    window.tiktokEmbed?.lib?.render?.(node);
-  };
-  if (window.tiktokEmbed?.lib?.render) {
-    nodes.forEach(paint);
-    return;
-  }
-  if (window.__tiktokLoading) return;
-  window.__tiktokLoading = true;
-  const script = document.createElement("script");
-  script.src = "https://www.tiktok.com/embed.js";
-  script.async = true;
-  script.onload = () => {
-    window.__tiktokLoading = false;
-    document.querySelectorAll(".tiktok-embed:not([data-mounted])").forEach(paint);
-  };
-  script.onerror = () => { window.__tiktokLoading = false; };
-  document.body.appendChild(script);
+function keptLink(url) {
+  return Boolean(youtubeId(url) || hostedVideo(url));
 }
 
 async function refreshPrivate() {
@@ -864,7 +765,6 @@ async function refreshPrivate() {
 document.addEventListener("click", async (event) => {
   const link = event.target.closest("#reader-body a");
   if (link) {
-    if (link.closest(".tiktok-hold, .fb-hold")) return;
     event.preventDefault();
     const href = link.getAttribute("href");
     if (href && href.startsWith("http")) await openSource(href, link.textContent);
@@ -1009,16 +909,9 @@ document.addEventListener("change", async (event) => {
   if (box) state.noteDraft = box.value;
   const incoming = [...input.files];
   input.value = "";
-  let warned = "";
   for (const file of incoming) {
-    if (state.noteFiles.length >= 6) { warned = "Six files is the limit for one note."; break; }
     const kind = file.type.startsWith("image/") ? "image" : file.type.startsWith("video/") ? "video" : "file";
-    if (kind === "file" && file.size > 1_500_000) {
-      warned = "That file is too large.";
-      continue;
-    }
     const stored = kind === "image" ? await shrinkImage(file) : file;
-    if (stored.size > 1_500_000) { warned = "That picture is still too large."; continue; }
     state.noteFiles.push({
       id: crypto.randomUUID(),
       file: stored,
@@ -1027,8 +920,7 @@ document.addEventListener("change", async (event) => {
       name: file.name || "File"
     });
   }
-  if (warned) say(warned);
-  else render();
+  render();
 });
 
 document.addEventListener("submit", async (event) => {
@@ -1073,13 +965,12 @@ document.addEventListener("submit", async (event) => {
       go(`#/recipe/${result.recipe.id}`);
     }
     if (form.id === "media-form") {
-      const incoming = new FormData(form);
-      const picture = await shrinkImage(incoming.get("file"));
-      const body = new FormData();
-      body.set("file", picture);
-      const kind = picture?.type?.startsWith("video/") ? "video" : "image";
+      const raw = new FormData(form).get("file");
+      const picture = raw?.type?.startsWith("image/") ? await shrinkImage(raw) : raw;
+      const saved = await uploadPieces(picture, picture?.name);
+      const kind = saved.kind === "video" ? "video" : "image";
       const role = kind === "image" && !state.recipes.find((item) => item.id === route().id)?.image ? "cover" : "gallery";
-      const result = await api(`/api/recipes/${route().id}/media?kind=${kind}&role=${role}`, { method: "POST", body });
+      const result = await api(`/api/recipes/${route().id}/media?kind=${kind}&role=${role}`, { method: "POST", json: { path: saved.path } });
       replaceRecipe(result.recipe);
       say("Picture saved.");
       render();
@@ -1097,10 +988,12 @@ document.addEventListener("submit", async (event) => {
         render();
       } else {
         if (!text && !state.noteFiles.length) throw new Error("Write a note, or add a picture.");
-        const body = new FormData();
-        body.set("body", text);
-        state.noteFiles.forEach((item) => body.append("file", item.file, item.name || "file"));
-        await api("/api/notes", { method: "POST", body });
+        const attachments = [];
+        for (const item of state.noteFiles) {
+          const saved = await uploadPieces(item.file, item.name);
+          attachments.push({ path: saved.path, name: item.name, kind: saved.kind });
+        }
+        await api("/api/notes", { method: "POST", json: { body: text, attachments } });
         state.noteFiles.forEach((item) => URL.revokeObjectURL(item.url));
         state.noteFiles = [];
         state.noteDraft = "";
@@ -1110,7 +1003,11 @@ document.addEventListener("submit", async (event) => {
       }
     }
     if (form.id === "link-form") {
-      await api("/api/library", { method: "POST", json: data });
+      const url = String(data.url || "").trim();
+      if (socialLink(url)) throw new Error("TikTok and Facebook stay out of the book. Use YouTube, or a video file you host.");
+      const kind = youtubeId(url) ? "youtube" : hostedVideo(url) ? "hosted" : "";
+      if (!kind) throw new Error("Paste a YouTube link, or a video file you host that ends in .mp4 or .webm.");
+      await api("/api/library", { method: "POST", json: { ...data, url, kind } });
       await refreshPrivate();
       say("Saved for later.");
       render();

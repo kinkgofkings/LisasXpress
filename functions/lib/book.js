@@ -146,29 +146,22 @@ async function readJson(request) {
   }
 }
 
-function storageOff() {
-  return json({ error: "Films are not ready to save yet. Pictures can be uploaded." }, 503);
-}
-
 async function storePicture(request, env, field) {
   let form;
   try {
     form = await request.formData();
   } catch {
-    return { error: json({ error: "That picture could not be read. Try a smaller photo." }, 400) };
+    return { error: json({ error: "That picture could not be read." }, 400) };
   }
   const file = form.get(field);
   if (!file || typeof file === "string") return { error: json({ error: "Choose a picture first." }, 400) };
   const type = file.type || "";
-  if (!/^image\/(jpeg|png|webp|gif)$/.test(type)) {
-    return { error: json({ error: "Use a JPEG, PNG, or WebP image." }, 400) };
+  if (!String(type).startsWith("image/")) {
+    return { error: json({ error: "Use a picture." }, 400) };
   }
   const bytes = new Uint8Array(await file.arrayBuffer());
   if (!bytes.byteLength) return { error: json({ error: "That picture was empty." }, 400) };
-  if (bytes.byteLength > 1_500_000) return { error: json({ error: "That picture is too large. Try a smaller one." }, 400) };
-  const ext = type.includes("png") ? "png" : type.includes("webp") ? "webp" : type.includes("gif") ? "gif" : "jpg";
-  const path = `/uploads/${Date.now()}-${crypto.randomUUID().slice(0, 8)}.${ext}`;
-  await env.DB.prepare("INSERT INTO files (path, mime, bytes) VALUES (?, ?, ?)").bind(path, type, bytes).run();
+  const path = await storeChunked(env, type, bytes, file.name);
   return { path, form };
 }
 
@@ -194,18 +187,45 @@ async function uploadMedia(request, env, recipeId, url) {
   if (!user) return json({ error: "Sign in first." }, 401);
   const recipe = await env.DB.prepare("SELECT * FROM recipes WHERE id = ?").bind(recipeId).first();
   if (!recipe) return json({ error: "That recipe is not in the book." }, 404);
-  if (url.searchParams.get("kind") === "video") return storageOff();
-  const saved = await storePicture(request, env, "file");
+  const contentType = request.headers.get("content-type") || "";
+  if (contentType.includes("application/json")) {
+    const body = await readJson(request);
+    const path = String(body.path || "");
+    if (!/^\/uploads\/[\w.-]+$/.test(path)) return json({ error: "That file could not be saved." }, 400);
+    const row = await env.DB.prepare("SELECT mime FROM files WHERE path = ?").bind(path).first();
+    if (!row) return json({ error: "That file could not be saved." }, 400);
+    const kind = String(row.mime).startsWith("video/") ? "video" : "image";
+    if (url.searchParams.get("role") === "cover" && kind === "image") {
+      await removeStored(env, recipe.image);
+      await env.DB.prepare("UPDATE recipes SET image = ?, image_credit = ?, updated_at = ? WHERE id = ?")
+        .bind(path, "Added by Lisa", new Date().toISOString(), recipe.id).run();
+    } else {
+      await env.DB.prepare(
+        "INSERT INTO recipe_media (recipe_id, kind, path, caption, created_at) VALUES (?, ?, ?, ?, ?)"
+      ).bind(recipe.id, kind, path, "", new Date().toISOString()).run();
+    }
+    return json({ recipe: await recipeRow(env, await env.DB.prepare("SELECT * FROM recipes WHERE id = ?").bind(recipe.id).first()) }, 201);
+  }
+  let form;
+  try {
+    form = await request.formData();
+  } catch {
+    return json({ error: "That file could not be read." }, 400);
+  }
+  const file = form.get("file");
+  if (!file || typeof file === "string" || !file.size) return json({ error: "Choose a file first." }, 400);
+  const saved = await storeUpload(env, file);
   if (saved.error) return saved.error;
-  if (url.searchParams.get("role") === "cover") {
+  const kind = saved.meta.kind === "video" ? "video" : "image";
+  if (url.searchParams.get("role") === "cover" && kind === "image") {
     await removeStored(env, recipe.image);
     await env.DB.prepare("UPDATE recipes SET image = ?, image_credit = ?, updated_at = ? WHERE id = ?")
-      .bind(saved.path, "Added by Lisa", new Date().toISOString(), recipe.id).run();
+      .bind(saved.meta.path, "Added by Lisa", new Date().toISOString(), recipe.id).run();
   } else {
-    const caption = String(saved.form.get("caption") || "").slice(0, 160);
+    const caption = String(form.get("caption") || "").slice(0, 160);
     await env.DB.prepare(
-      "INSERT INTO recipe_media (recipe_id, kind, path, caption, created_at) VALUES (?, 'image', ?, ?, ?)"
-    ).bind(recipe.id, saved.path, caption, new Date().toISOString()).run();
+      "INSERT INTO recipe_media (recipe_id, kind, path, caption, created_at) VALUES (?, ?, ?, ?, ?)"
+    ).bind(recipe.id, kind, saved.meta.path, caption, new Date().toISOString()).run();
   }
   return json({ recipe: await recipeRow(env, await env.DB.prepare("SELECT * FROM recipes WHERE id = ?").bind(recipe.id).first()) }, 201);
 }
@@ -248,6 +268,9 @@ async function route(request, env, url, parts) {
   if (first === "notes" && !second && method === "POST") return createNote(request, env);
   if (first === "notes" && second && method === "PATCH") return updateNote(request, env, second);
   if (first === "notes" && second && method === "DELETE") return deleteNote(request, env, second);
+
+  if (first === "media" && !second && method === "POST") return startMedia(request, env);
+  if (first === "media" && second === "parts" && method === "PUT") return saveMediaPart(request, env, url);
 
   if (first === "films" && !second && method === "POST") return startFilm(request, env);
   if (first === "films" && second === "parts" && method === "PUT") return saveFilmPart(request, env, url);
@@ -457,8 +480,34 @@ function videoExt(mime) {
   return "webm";
 }
 
-async function storeVideo(env, mime, bytes) {
-  const path = `/uploads/${Date.now()}-${crypto.randomUUID().slice(0, 8)}.${videoExt(mime)}`;
+function fileExt(mime, name) {
+  const known = {
+    "image/jpeg": "jpg",
+    "image/png": "png",
+    "image/webp": "webp",
+    "image/gif": "gif",
+    "image/heic": "heic",
+    "video/mp4": "mp4",
+    "video/webm": "webm",
+    "video/quicktime": "mov",
+    "audio/mpeg": "mp3",
+    "audio/mp4": "m4a",
+    "application/pdf": "pdf",
+    "text/plain": "txt"
+  };
+  if (known[mime]) return known[mime];
+  const ext = String(name || "").split(".").pop()?.toLowerCase().replace(/[^\w]/g, "").slice(0, 5);
+  return ext || "bin";
+}
+
+function mediaKind(mime) {
+  if (mime.startsWith("image/")) return "image";
+  if (mime.startsWith("video/")) return "video";
+  return "file";
+}
+
+async function storeChunked(env, mime, bytes, name) {
+  const path = `/uploads/${Date.now()}-${crypto.randomUUID().slice(0, 8)}.${fileExt(mime, name)}`;
   await env.DB.prepare(
     "INSERT INTO files (path, mime, bytes, byte_size, part_size) VALUES (?, ?, ?, ?, ?)"
   ).bind(path, mime, new Uint8Array([0]), bytes.byteLength, FILM_PART).run();
@@ -467,6 +516,61 @@ async function storeVideo(env, mime, bytes) {
     await env.DB.prepare("INSERT INTO file_parts (path, idx, bytes) VALUES (?, ?, ?)").bind(path, idx, slice).run();
   }
   return path;
+}
+
+function cleanMediaType(mime, name) {
+  let type = String(mime || "").split(";")[0].trim().toLowerCase();
+  const ext = String(name || "").split(".").pop()?.toLowerCase() || "";
+  if (!type || type === "application/octet-stream") {
+    const guess = {
+      mp4: "video/mp4", webm: "video/webm", mov: "video/quicktime", m4v: "video/mp4",
+      jpg: "image/jpeg", jpeg: "image/jpeg", png: "image/png", webp: "image/webp", gif: "image/gif", heic: "image/heic",
+      mp3: "audio/mpeg", m4a: "audio/mp4", pdf: "application/pdf", txt: "text/plain"
+    }[ext];
+    if (guess) type = guess;
+  }
+  return type || "application/octet-stream";
+}
+
+async function startMedia(request, env) {
+  const user = await userFrom(env, request);
+  if (!user) return json({ error: "Sign in first." }, 401);
+  const body = await readJson(request);
+  const name = String(body.name || "file").replace(/[^\w.\- ]+/g, "").slice(0, 80) || "file";
+  const mime = cleanMediaType(body.mime, name);
+  const size = Number(body.size);
+  if (!Number.isFinite(size) || size < 1) return json({ error: "That file was empty." }, 400);
+  const path = `/uploads/${Date.now()}-${crypto.randomUUID().slice(0, 8)}.${fileExt(mime, name)}`;
+  await env.DB.prepare(
+    "INSERT INTO files (path, mime, bytes, byte_size, part_size) VALUES (?, ?, ?, ?, ?)"
+  ).bind(path, mime, new Uint8Array([0]), size, FILM_PART).run();
+  return json({ path, partSize: FILM_PART, mime, name, kind: mediaKind(mime) }, 201);
+}
+
+async function saveMediaPart(request, env, url) {
+  const user = await userFrom(env, request);
+  if (!user) return json({ error: "Sign in first." }, 401);
+  const path = String(url.searchParams.get("path") || "");
+  const idx = Number(url.searchParams.get("idx"));
+  if (!/^\/uploads\/[\w.-]+$/.test(path) || !Number.isInteger(idx) || idx < 0) {
+    return json({ error: "That file could not be saved." }, 400);
+  }
+  const row = await env.DB.prepare("SELECT path FROM files WHERE path = ?").bind(path).first();
+  if (!row) return json({ error: "That file could not be saved." }, 404);
+  let bytes;
+  try {
+    bytes = new Uint8Array(await request.arrayBuffer());
+  } catch {
+    return json({ error: "That file could not be saved. Try again." }, 400);
+  }
+  if (!bytes.byteLength || bytes.byteLength > 1_000_000) {
+    return json({ error: "That file could not be saved. Try again." }, 400);
+  }
+  await env.DB.prepare(`
+    INSERT INTO file_parts (path, idx, bytes) VALUES (?, ?, ?)
+    ON CONFLICT(path, idx) DO UPDATE SET bytes = excluded.bytes
+  `).bind(path, idx, bytes).run();
+  return json({ ok: true });
 }
 
 async function startFilm(request, env) {
@@ -529,43 +633,12 @@ function noteTitle(text, attachments) {
 }
 
 async function storeUpload(env, file) {
-  const type = String(file.type || "").split(";")[0].trim().toLowerCase();
-  const kind = type.startsWith("image/") ? "image" : type.startsWith("video/") ? "video" : "file";
-  const allowed = kind === "image"
-    ? /^image\/(jpeg|png|webp|gif)$/
-    : kind === "video"
-      ? /^video\/(mp4|webm|quicktime)$/
-      : /^(application\/pdf|text\/plain)$/;
-  if (!allowed.test(type)) {
-    const message = kind === "image"
-      ? "Use a JPEG, PNG, or WebP picture."
-      : kind === "video"
-        ? "Use an MP4 or WebM video."
-        : "Use a PDF or a text file.";
-    return { error: json({ error: message }, 400) };
-  }
+  const name = String(file.name || "File").replace(/[^\w.\- ]+/g, "").slice(0, 80) || "File";
+  const type = cleanMediaType(file.type, name);
+  const kind = mediaKind(type);
   const bytes = new Uint8Array(await file.arrayBuffer());
   if (!bytes.byteLength) return { error: json({ error: "That file was empty." }, 400) };
-  if (kind === "video") {
-    const path = await storeVideo(env, type, bytes);
-    const name = String(file.name || "Video").replace(/[^\w.\- ]+/g, "").slice(0, 80) || "Video";
-    return { meta: { path, mime: type, name, kind } };
-  }
-  if (bytes.byteLength > 1_500_000) return { error: json({ error: "That file is too large." }, 400) };
-  const ext = {
-    "image/jpeg": "jpg",
-    "image/png": "png",
-    "image/webp": "webp",
-    "image/gif": "gif",
-    "video/mp4": "mp4",
-    "video/webm": "webm",
-    "video/quicktime": "mov",
-    "application/pdf": "pdf",
-    "text/plain": "txt"
-  }[type] || "bin";
-  const path = `/uploads/${Date.now()}-${crypto.randomUUID().slice(0, 8)}.${ext}`;
-  await env.DB.prepare("INSERT INTO files (path, mime, bytes) VALUES (?, ?, ?)").bind(path, type, bytes).run();
-  const name = String(file.name || "File").replace(/[^\w.\- ]+/g, "").slice(0, 80) || "File";
+  const path = await storeChunked(env, type, bytes, name);
   return { meta: { path, mime: type, name, kind } };
 }
 
@@ -589,12 +662,11 @@ async function createNote(request, env) {
     try {
       form = await request.formData();
     } catch {
-      return json({ error: "That note could not be read. Try a smaller file." }, 400);
+      return json({ error: "That note could not be read. Try it again." }, 400);
     }
     text = String(form.get("body") || "").slice(0, 20000);
     const files = form.getAll("file").filter((file) => file && typeof file !== "string" && file.size);
     if (!text.trim() && !files.length) return json({ error: "Write a note, or add a picture." }, 400);
-    if (files.length > 6) return json({ error: "Six files is the limit for one note." }, 400);
     for (const file of files) {
       const saved = await storeUpload(env, file);
       if (saved.error) return saved.error;
@@ -603,7 +675,22 @@ async function createNote(request, env) {
   } else {
     const body = await readJson(request);
     text = String(body.body || "").slice(0, 20000);
-    if (!text.trim()) return json({ error: "Write a note first." }, 400);
+    const listed = Array.isArray(body.attachments) ? body.attachments : [];
+    for (const item of listed) {
+      const path = String(item?.path || "");
+      if (!/^\/uploads\/[\w.-]+$/.test(path)) continue;
+      const row = await env.DB.prepare("SELECT mime FROM files WHERE path = ?").bind(path).first();
+      if (!row) continue;
+      const mime = String(row.mime || "");
+      const kind = mime.startsWith("video/") ? "video" : mime.startsWith("image/") ? "image" : "file";
+      attachments.push({
+        path,
+        mime,
+        name: String(item.name || "File").replace(/[^\w.\- ]+/g, "").slice(0, 80) || "File",
+        kind
+      });
+    }
+    if (!text.trim() && !attachments.length) return json({ error: "Write a note, or add a picture." }, 400);
   }
   const title = noteTitle(text, attachments);
   const now = new Date().toISOString();
@@ -645,9 +732,20 @@ async function listLibrary(request, env) {
   if (!user) return json({ error: "Sign in first." }, 401);
   const items = await env.DB.prepare(`
     SELECT id, kind, title, url, description, notes, file_path AS filePath, created_at AS createdAt
-    FROM library_items WHERE user_id = ? ORDER BY created_at DESC
+    FROM library_items WHERE user_id = ? AND kind NOT IN ('tiktok', 'facebook') ORDER BY created_at DESC
   `).bind(user.id).all();
   return json({ items: items.results || [] });
+}
+
+function savedLinkKind(raw) {
+  let url;
+  try { url = new URL(String(raw || "").trim()); } catch { return ""; }
+  if (!["http:", "https:"].includes(url.protocol)) return "";
+  const host = url.hostname.replace(/^www\./, "").toLowerCase();
+  if (host.endsWith("tiktok.com") || host.endsWith("facebook.com") || host === "fb.watch" || host.endsWith("fb.com") || host.endsWith("instagram.com")) return "social";
+  if (host === "youtu.be" || host.endsWith("youtube.com") || host.endsWith("youtube-nocookie.com")) return "youtube";
+  if (/\.(mp4|webm|mov|m4v|ogg)$/i.test(url.pathname)) return "hosted";
+  return "";
 }
 
 async function createLibrary(request, env) {
@@ -656,13 +754,12 @@ async function createLibrary(request, env) {
   if (!user) return json({ error: "Sign in first." }, 401);
   if (type.includes("multipart/form-data")) return saveFilm(env, user, request);
   const body = await readJson(request);
-  const kind = body.kind;
   const title = String(body.title || "").trim().slice(0, 160);
   const link = String(body.url || "").trim();
-  if (!kind) return json({ error: "Choose YouTube, TikTok, Facebook, or a film of your own." }, 400);
+  const kind = savedLinkKind(link);
   if (!title) return json({ error: "Give it a title." }, 400);
-  if (kind === "film") return storageOff();
-  if (!/^https?:\/\//.test(link)) return json({ error: "Paste the full link, starting with http." }, 400);
+  if (kind === "social") return json({ error: "TikTok and Facebook stay out of the book. Use YouTube, or a video file you host." }, 400);
+  if (kind !== "youtube" && kind !== "hosted") return json({ error: "Paste a YouTube link, or a video file you host that ends in .mp4 or .webm." }, 400);
   const now = new Date().toISOString();
   const description = String(body.description || "").slice(0, 5000);
   const notes = String(body.notes || "").slice(0, 2000);
@@ -708,14 +805,20 @@ async function updateLibrary(request, env, id) {
   const title = String(body.title ?? item.title).trim().slice(0, 160);
   if (!title) return json({ error: "Give it a title." }, 400);
   const link = String(body.url ?? item.url).trim();
-  if (item.kind !== "film" && !/^https?:\/\//.test(link)) return json({ error: "Paste the full link, starting with http." }, 400);
+  let kind = item.kind;
+  if (item.kind !== "film") {
+    kind = savedLinkKind(link);
+    if (kind === "social") return json({ error: "TikTok and Facebook stay out of the book. Use YouTube, or a video file you host." }, 400);
+    if (kind !== "youtube" && kind !== "hosted") return json({ error: "Paste a YouTube link, or a video file you host that ends in .mp4 or .webm." }, 400);
+  }
   const description = String(body.description ?? item.description).slice(0, 5000);
   const notes = String(body.notes ?? item.notes).slice(0, 2000);
+  const storedUrl = item.kind === "film" ? item.url : link;
   await env.DB.prepare(
-    "UPDATE library_items SET title = ?, url = ?, description = ?, notes = ? WHERE id = ?"
-  ).bind(title, item.kind === "film" ? item.url : link, description, notes, item.id).run();
+    "UPDATE library_items SET kind = ?, title = ?, url = ?, description = ?, notes = ? WHERE id = ?"
+  ).bind(kind, title, storedUrl, description, notes, item.id).run();
   return json({
-    item: { id: item.id, kind: item.kind, title, url: item.kind === "film" ? item.url : link, description, notes, filePath: item.file_path, createdAt: item.created_at }
+    item: { id: item.id, kind, title, url: storedUrl, description, notes, filePath: item.file_path, createdAt: item.created_at }
   });
 }
 

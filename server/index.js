@@ -63,14 +63,12 @@ function fileFilter(kind) {
   };
 }
 
-const imageUpload = multer({ storage, limits: { fileSize: 8 * 1024 * 1024 }, fileFilter: fileFilter("image") });
+const imageUpload = multer({ storage, fileFilter: fileFilter("image") });
 const videoUpload = multer({ storage, fileFilter: fileFilter("video") });
 const noteUpload = multer({
   storage,
-  limits: { files: 6 },
   fileFilter(_req, file, cb) {
-    const ok = /^(image\/(jpeg|png|webp|gif)|video\/(mp4|webm|quicktime)|application\/pdf|text\/plain)$/.test(file.mimetype);
-    cb(ok ? null : new Error("Use a picture, a short video, a PDF, or a text file."), ok);
+    cb(null, true);
   }
 });
 
@@ -309,7 +307,33 @@ app.get("/api/notes", (req, res) => {
 });
 
 app.post("/api/notes", (req, res) => {
-  noteUpload.array("file", 6)(req, res, (error) => {
+  if ((req.get("content-type") || "").includes("application/json")) {
+    const user = requireUser(req, res);
+    if (!user) return;
+    const text = String(req.body.body || "").slice(0, 20000);
+    const listed = Array.isArray(req.body.attachments) ? req.body.attachments : [];
+    const attachments = listed.flatMap((item) => {
+      const filePath = String(item?.path || "");
+      if (!/^\/uploads\/[\w.-]+$/.test(filePath)) return [];
+      const full = path.join(uploadDir, path.basename(filePath));
+      if (!fs.existsSync(full)) return [];
+      const mime = String(item.mime || "");
+      const kind = mime.startsWith("video/") || item.kind === "video" ? "video" : mime.startsWith("image/") || item.kind === "image" ? "image" : "file";
+      return [{
+        path: filePath,
+        mime,
+        name: String(item.name || "File").replace(/[^\w.\- ]+/g, "").slice(0, 80) || "File",
+        kind
+      }];
+    });
+    if (!text.trim() && !attachments.length) return res.status(400).json({ error: "Write a note, or add a picture." });
+    const line = text.trim().split(/\n/)[0].slice(0, 80);
+    const title = line || (attachments[0]?.kind === "video" ? "Video" : attachments[0]?.kind === "file" ? "File" : "Photo");
+    const now = new Date().toISOString();
+    const result = db.prepare("INSERT INTO notes (user_id, title, body, attachments, updated_at) VALUES (?, ?, ?, ?, ?)").run(user.id, title, text, JSON.stringify(attachments), now);
+    return res.status(201).json({ note: { id: Number(result.lastInsertRowid), title, body: text, attachments, updatedAt: now } });
+  }
+  noteUpload.any()(req, res, (error) => {
     if (error) return res.status(400).json({ error: error.message || "That file could not be saved." });
     const user = requireUser(req, res);
     if (!user) return;
@@ -359,7 +383,7 @@ app.get("/api/library", (req, res) => {
   if (!user) return;
   const items = db.prepare(`
     SELECT id, kind, title, url, description, notes, file_path AS filePath, created_at AS createdAt
-    FROM library_items WHERE user_id = ? ORDER BY created_at DESC
+    FROM library_items WHERE user_id = ? AND kind NOT IN ('tiktok', 'facebook') ORDER BY created_at DESC
   `).all(user.id);
   res.json({ items });
 });
@@ -372,6 +396,42 @@ app.post("/api/library", (req, res) => {
 });
 
 const FILM_PART = 800_000;
+
+app.post("/api/media", (req, res) => {
+  const user = requireUser(req, res);
+  if (!user) return;
+  const name = String(req.body.name || "file").replace(/[^\w.\- ]+/g, "").slice(0, 80) || "file";
+  const ext = path.extname(name).toLowerCase().replace(/[^.a-z0-9]/g, "").slice(0, 6) || ".bin";
+  const stored = `${Date.now()}-${crypto.randomBytes(4).toString("hex")}${ext}`;
+  const filePath = `/uploads/${stored}`;
+  fs.writeFileSync(path.join(uploadDir, stored), Buffer.alloc(0));
+  const mime = String(req.body.mime || "").split(";")[0] || "application/octet-stream";
+  const kind = mime.startsWith("video/") ? "video" : mime.startsWith("image/") ? "image" : "file";
+  res.status(201).json({ path: filePath, partSize: FILM_PART, mime, name, kind });
+});
+
+app.put("/api/media/parts", express.raw({ type: "*/*", limit: "2mb" }), (req, res) => {
+  const user = requireUser(req, res);
+  if (!user) return;
+  const filePath = String(req.query.path || "");
+  const idx = Number(req.query.idx);
+  if (!/^\/uploads\/[\w.-]+$/.test(filePath) || !Number.isInteger(idx) || idx < 0) {
+    return res.status(400).json({ error: "That file could not be saved." });
+  }
+  const full = path.join(uploadDir, path.basename(filePath));
+  if (!full.startsWith(`${uploadDir}${path.sep}`) || !fs.existsSync(full)) {
+    return res.status(404).json({ error: "That file could not be saved." });
+  }
+  const body = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
+  if (!body.length) return res.status(400).json({ error: "That file could not be saved. Try again." });
+  const fd = fs.openSync(full, "r+");
+  try {
+    fs.writeSync(fd, body, 0, body.length, idx * FILM_PART);
+  } finally {
+    fs.closeSync(fd);
+  }
+  res.json({ ok: true });
+});
 
 app.post("/api/films", (req, res) => {
   const user = requireUser(req, res);
@@ -418,25 +478,39 @@ app.put("/api/films/parts", express.raw({ type: "*/*", limit: "2mb" }), (req, re
   res.json({ ok: true });
 });
 
+function savedLinkKind(raw) {
+  let url;
+  try { url = new URL(String(raw || "").trim()); } catch { return ""; }
+  if (!["http:", "https:"].includes(url.protocol)) return "";
+  const host = url.hostname.replace(/^www\./, "").toLowerCase();
+  if (host.endsWith("tiktok.com") || host.endsWith("facebook.com") || host === "fb.watch" || host.endsWith("fb.com") || host.endsWith("instagram.com")) return "social";
+  if (host === "youtu.be" || host.endsWith("youtube.com") || host.endsWith("youtube-nocookie.com")) return "youtube";
+  if (/\.(mp4|webm|mov|m4v|ogg)$/i.test(url.pathname)) return "hosted";
+  return "";
+}
+
 function saveLibrary(req, res, err, kind) {
   if (err) return res.status(400).json({ error: err.message });
   const user = requireUser(req, res);
   if (!user) return;
-  if (!kind) return res.status(400).json({ error: "Choose YouTube, TikTok, Facebook, or a film of your own." });
   const title = String(req.body.title || "").trim().slice(0, 160);
   const url = String(req.body.url || "").trim();
+  const linkKind = kind === "film" ? "film" : savedLinkKind(url);
   if (!title) return res.status(400).json({ error: "Give it a title." });
-  if (kind === "film" && !req.file) return res.status(400).json({ error: "Choose a video file or record one." });
-  if (kind !== "film" && !/^https?:\/\//.test(url)) return res.status(400).json({ error: "Paste the full link, starting with http." });
+  if (linkKind === "film" && !req.file) return res.status(400).json({ error: "Choose a video file or record one." });
+  if (linkKind === "social") return res.status(400).json({ error: "TikTok and Facebook stay out of the book. Use YouTube, or a video file you host." });
+  if (linkKind !== "film" && linkKind !== "youtube" && linkKind !== "hosted") {
+    return res.status(400).json({ error: "Paste a YouTube link, or a video file you host that ends in .mp4 or .webm." });
+  }
   const now = new Date().toISOString();
   const result = db.prepare(`
     INSERT INTO library_items (user_id, kind, title, url, description, notes, file_path, created_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     user.id,
-    kind,
+    linkKind,
     title,
-    kind === "film" ? "" : url,
+    linkKind === "film" ? "" : url,
     String(req.body.description || "").slice(0, 5000),
     String(req.body.notes || "").slice(0, 2000),
     req.file ? `/uploads/${req.file.filename}` : "",
@@ -445,9 +519,9 @@ function saveLibrary(req, res, err, kind) {
   res.status(201).json({
     item: {
       id: result.lastInsertRowid,
-      kind,
+      kind: linkKind,
       title,
-      url: kind === "film" ? "" : url,
+      url: linkKind === "film" ? "" : url,
       description: String(req.body.description || ""),
       notes: String(req.body.notes || ""),
       filePath: req.file ? `/uploads/${req.file.filename}` : "",
@@ -464,12 +538,17 @@ app.patch("/api/library/:id", (req, res) => {
   const title = String(req.body.title ?? item.title).trim().slice(0, 160);
   if (!title) return res.status(400).json({ error: "Give it a title." });
   const link = String(req.body.url ?? item.url).trim();
-  if (item.kind !== "film" && !/^https?:\/\//.test(link)) return res.status(400).json({ error: "Paste the full link, starting with http." });
+  let nextKind = item.kind;
+  if (item.kind !== "film") {
+    nextKind = savedLinkKind(link);
+    if (nextKind === "social") return res.status(400).json({ error: "TikTok and Facebook stay out of the book. Use YouTube, or a video file you host." });
+    if (nextKind !== "youtube" && nextKind !== "hosted") return res.status(400).json({ error: "Paste a YouTube link, or a video file you host that ends in .mp4 or .webm." });
+  }
   const description = String(req.body.description ?? item.description).slice(0, 5000);
   const notes = String(req.body.notes ?? item.notes).slice(0, 2000);
   const url = item.kind === "film" ? item.url : link;
-  db.prepare("UPDATE library_items SET title = ?, url = ?, description = ?, notes = ? WHERE id = ?").run(title, url, description, notes, item.id);
-  res.json({ item: { id: item.id, kind: item.kind, title, url, description, notes, filePath: item.file_path, createdAt: item.created_at } });
+  db.prepare("UPDATE library_items SET kind = ?, title = ?, url = ?, description = ?, notes = ? WHERE id = ?").run(nextKind, title, url, description, notes, item.id);
+  res.json({ item: { id: item.id, kind: nextKind, title, url, description, notes, filePath: item.file_path, createdAt: item.created_at } });
 });
 
 app.delete("/api/library/:id", (req, res) => {
