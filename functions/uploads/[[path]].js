@@ -3,7 +3,10 @@ export async function onRequest(context) {
   const name = Array.isArray(parts) ? parts.join("/") : String(parts || "");
   if (!name || name.includes("..")) return new Response("Not found", { status: 404 });
   const path = `/uploads/${name}`;
-  const info = await context.env.DB.prepare("SELECT mime, length(bytes) AS size FROM files WHERE path = ?").bind(path).first();
+  const info = await context.env.DB.prepare(
+    "SELECT mime, byte_size, part_size, length(bytes) AS size FROM files WHERE path = ?"
+  ).bind(path).first();
+  if (info?.byte_size > 0) return serveParts(context.request, context.env.DB, path, info);
   if (!info?.size) return new Response("Not found", { status: 404 });
   const body = await readFile(context.env.DB, path, info.size);
   if (!body?.byteLength) return new Response("Not found", { status: 404 });
@@ -15,6 +18,56 @@ export async function onRequest(context) {
       "cache-control": "public, max-age=3600"
     }
   });
+}
+
+function serveParts(request, db, path, info) {
+  const size = Number(info.byte_size);
+  const part = Number(info.part_size) || 800_000;
+  const header = request.headers.get("range") || "";
+  let start = 0;
+  let end = Math.min(part, size) - 1;
+  const match = /bytes=(\d+)-(\d*)/.exec(header);
+  if (match) {
+    start = Number(match[1]);
+    if (start >= size) {
+      return new Response(null, { status: 416, headers: { "content-range": `bytes */${size}` } });
+    }
+    const asked = match[2] ? Number(match[2]) : start + part - 1;
+    end = Math.min(asked, start + part - 1, size - 1);
+  }
+  return readRange(db, path, start, end - start + 1, part).then((body) => {
+    if (!body?.byteLength) return new Response("Not found", { status: 404 });
+    const last = start + body.byteLength - 1;
+    const mime = String(info.mime || "application/octet-stream").split(";")[0];
+    return new Response(body, {
+      status: header || body.byteLength < size ? 206 : 200,
+      headers: {
+        "content-type": mime,
+        "content-length": String(body.byteLength),
+        "accept-ranges": "bytes",
+        "content-range": `bytes ${start}-${last}/${size}`,
+        "cache-control": "public, max-age=3600"
+      }
+    });
+  });
+}
+
+async function readRange(db, path, start, length, part) {
+  const out = new Uint8Array(length);
+  let filled = 0;
+  let pos = start;
+  while (filled < length) {
+    const idx = Math.floor(pos / part);
+    const offset = pos - idx * part;
+    const rows = await db.prepare("SELECT bytes FROM file_parts WHERE path = ? AND idx = ?").bind(path, idx).raw();
+    const chunk = asBytes(rows?.[0]?.[0]);
+    if (!chunk || offset >= chunk.byteLength) break;
+    const take = Math.min(chunk.byteLength - offset, length - filled);
+    out.set(chunk.subarray(offset, offset + take), filled);
+    filled += take;
+    pos += take;
+  }
+  return filled === length ? out : out.subarray(0, filled);
 }
 
 async function readFile(db, path, size) {

@@ -1013,8 +1013,8 @@ document.addEventListener("change", async (event) => {
   for (const file of incoming) {
     if (state.noteFiles.length >= 6) { warned = "Six files is the limit for one note."; break; }
     const kind = file.type.startsWith("image/") ? "image" : file.type.startsWith("video/") ? "video" : "file";
-    if (kind !== "image" && file.size > 1_500_000) {
-      warned = kind === "video" ? "That video is too big to keep. Try a short clip." : "That file is too large.";
+    if (kind === "file" && file.size > 1_500_000) {
+      warned = "That file is too large.";
       continue;
     }
     const stored = kind === "image" ? await shrinkImage(file) : file;
@@ -1117,15 +1117,37 @@ document.addEventListener("submit", async (event) => {
     }
     if (form.id === "film-form") {
       rememberFilm();
-      const body = new FormData(form);
+      const fields = new FormData(form);
+      const chosen = fields.get("file");
       const take = state.recording?.blob;
-      if (take && !body.get("file")?.size) {
-        if (take.size > 1_500_000) throw new Error("That take is too long to keep. Record a shorter one.");
-        const ext = take.type.includes("mp4") ? "mp4" : "webm";
-        body.set("file", take, `lisa-film.${ext}`);
+      const file = take?.size ? take : chosen;
+      if (!file?.size) throw new Error("Record a take or choose a video first.");
+      const title = String(fields.get("title") || "").trim();
+      if (!title) throw new Error("Give the film a title.");
+      const button = form.querySelector("[type=submit]");
+      if (button) button.textContent = "Saving…";
+      const started = await api("/api/films", {
+        method: "POST",
+        json: {
+          title,
+          description: String(fields.get("description") || ""),
+          mime: String(file.type || "video/webm").split(";")[0],
+          size: file.size
+        }
+      });
+      try {
+        const part = started.partSize || 800_000;
+        for (let offset = 0, idx = 0; offset < file.size; offset += part, idx += 1) {
+          await api(`/api/films/parts?path=${encodeURIComponent(started.path)}&idx=${idx}`, {
+            method: "PUT",
+            body: file.slice(offset, offset + part),
+            headers: { "Content-Type": "application/octet-stream" }
+          });
+        }
+      } catch (error) {
+        await api(`/api/library/${started.id}`, { method: "DELETE" }).catch(() => {});
+        throw error;
       }
-      body.set("kind", "film");
-      await api("/api/library", { method: "POST", body });
       closeCamera();
       state.filmDraft = { title: "", description: "" };
       await refreshPrivate();

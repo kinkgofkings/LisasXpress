@@ -64,10 +64,10 @@ function fileFilter(kind) {
 }
 
 const imageUpload = multer({ storage, limits: { fileSize: 8 * 1024 * 1024 }, fileFilter: fileFilter("image") });
-const videoUpload = multer({ storage, limits: { fileSize: 80 * 1024 * 1024 }, fileFilter: fileFilter("video") });
+const videoUpload = multer({ storage, fileFilter: fileFilter("video") });
 const noteUpload = multer({
   storage,
-  limits: { fileSize: 8 * 1024 * 1024, files: 6 },
+  limits: { files: 6 },
   fileFilter(_req, file, cb) {
     const ok = /^(image\/(jpeg|png|webp|gif)|video\/(mp4|webm|quicktime)|application\/pdf|text\/plain)$/.test(file.mimetype);
     cb(ok ? null : new Error("Use a picture, a short video, a PDF, or a text file."), ok);
@@ -369,6 +369,53 @@ app.post("/api/library", (req, res) => {
     return videoUpload.single("file")(req, res, (err) => saveLibrary(req, res, err, "film"));
   }
   saveLibrary(req, res, null, req.body?.kind);
+});
+
+const FILM_PART = 800_000;
+
+app.post("/api/films", (req, res) => {
+  const user = requireUser(req, res);
+  if (!user) return;
+  const title = String(req.body.title || "").trim().slice(0, 160);
+  if (!title) return res.status(400).json({ error: "Give the film a title." });
+  const mime = String(req.body.mime || "").split(";")[0].trim().toLowerCase();
+  if (!/^video\/(mp4|webm|quicktime)$/.test(mime)) return res.status(400).json({ error: "Use an MP4 or WebM video." });
+  const size = Number(req.body.size);
+  if (!Number.isFinite(size) || size < 1) return res.status(400).json({ error: "That film was empty." });
+  const ext = mime.includes("mp4") ? ".mp4" : mime.includes("quicktime") ? ".mov" : ".webm";
+  const name = `${Date.now()}-${crypto.randomBytes(4).toString("hex")}${ext}`;
+  const filePath = `/uploads/${name}`;
+  fs.writeFileSync(path.join(uploadDir, name), Buffer.alloc(0));
+  const description = String(req.body.description || "").slice(0, 5000);
+  const now = new Date().toISOString();
+  const result = db.prepare(`
+    INSERT INTO library_items (user_id, kind, title, url, description, notes, file_path, created_at)
+    VALUES (?, 'film', ?, '', ?, '', ?, ?)
+  `).run(user.id, title, description, filePath, now);
+  res.status(201).json({ id: Number(result.lastInsertRowid), path: filePath, partSize: FILM_PART });
+});
+
+app.put("/api/films/parts", express.raw({ type: "*/*", limit: "2mb" }), (req, res) => {
+  const user = requireUser(req, res);
+  if (!user) return;
+  const filePath = String(req.query.path || "");
+  const idx = Number(req.query.idx);
+  if (!/^\/uploads\/[\w.-]+$/.test(filePath) || !Number.isInteger(idx) || idx < 0) {
+    return res.status(400).json({ error: "That film could not be saved." });
+  }
+  const owned = db.prepare("SELECT id FROM library_items WHERE file_path = ? AND user_id = ? AND kind = 'film'").get(filePath, user.id);
+  if (!owned) return res.status(404).json({ error: "That film is not yours." });
+  const body = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
+  if (!body.length || body.length > 1_000_000) return res.status(400).json({ error: "That film could not be saved. Try again." });
+  const full = path.join(uploadDir, path.basename(filePath));
+  if (!full.startsWith(`${uploadDir}${path.sep}`)) return res.status(400).json({ error: "That film could not be saved." });
+  const fd = fs.openSync(full, "r+");
+  try {
+    fs.writeSync(fd, body, 0, body.length, idx * FILM_PART);
+  } finally {
+    fs.closeSync(fd);
+  }
+  res.json({ ok: true });
 });
 
 function saveLibrary(req, res, err, kind) {
