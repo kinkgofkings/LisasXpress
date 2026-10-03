@@ -325,7 +325,8 @@ function stapleBands() {
     plateBand("From the garden", "Pulled, washed, pickled, and canned.", plates.filter((recipe) => recipe.cuisine === "garden")),
     plateBand("The pot", "Pot roasts and homemade stews.", plates.filter((recipe) => /stew|pot roast/i.test(recipe.title)), 6),
     plateBand("Little ones", "Soft fruit for babies. Fruit, yogurt, and oats for toddlers.", plates.filter((recipe) => recipe.cuisine === "kids"), 6),
-    plateBand("The Pet Connection", "Dog treats. Not the whole supper.", plates.filter((recipe) => recipe.cuisine === "pets"), 8)
+    plateBand("The Pet Connection", "Cooked meals. Meat, liver, vegetables, and eggshell.", plates.filter((recipe) => recipe.cuisine === "pets" && recipe.category === "Meals"), 8),
+    plateBand("Dog treats", "Treats. Not the whole supper.", plates.filter((recipe) => recipe.cuisine === "pets" && recipe.category !== "Meals"), 8)
   ].join("");
 }
 
@@ -384,7 +385,8 @@ function recipeView(recipe) {
         <p class="kicker">${recipe.world ? "Library" : esc(cuisineLabel(recipe.cuisine))} · ${esc(recipe.category)}${recipe.author ? ` · ${esc(recipe.author.name)}` : ""}${recipe.family ? `<span class="badge">Tex's kitchen</span>` : ""}</p>
         <h2 class="page-title" style="font-size:clamp(36px,5vw,58px)">${esc(recipe.title)}</h2>
         <p>${esc(recipe.summary)}</p>
-        ${recipe.cuisine === "pets" ? `<p class="empty">A treat for the dog, not the whole supper. Ask the vet before a dog's food changes. Never use xylitol, chocolate, grapes, raisins, onion, or garlic.</p>` : ""}
+        ${recipe.cuisine === "pets" && recipe.category === "Meals" ? `<p class="empty">A cooked meal: meat, a little liver, vegetables, and ground eggshell. Leave out the eggshell and it is not a meal. Ask the vet for the daily amount. A veterinary nutritionist can write a diet for one dog.</p>` : ""}
+        ${recipe.cuisine === "pets" && recipe.category !== "Meals" ? `<p class="empty">A treat for the dog, not the whole supper. Ask the vet before a dog's food changes. Never use xylitol, chocolate, grapes, raisins, onion, or garlic.</p>` : ""}
         ${recipe.category === "Babies" ? `<p class="empty">For a baby who is already eating smooth food. No honey before the first birthday. Ask the baby's doctor before a new food.</p>` : ""}
         ${recipe.category === "Toddlers" ? `<p class="empty">Soft pieces for a toddler. Cut fruit small. These are snacks of fruit, yogurt, and oats, not a meal plan.</p>` : ""}
         <div class="meta">
@@ -442,7 +444,7 @@ function editor(recipe) {
       <div class="field"><label>Title<input name="title" required value="${esc(value.title)}"></label></div>
       <div class="split">
         <div class="field"><label>Table<select name="cuisine">${[["texas", "Texas"], ["texmex", "Tex-Mex"], ["garden", "Garden"], ["kids", "Little ones"], ["pets", "The Pet Connection"], ["cajun", "Cajun"], ["library", "Library"]].map(([id, label]) => `<option value="${id}" ${value.cuisine === id ? "selected" : ""}>${label}</option>`).join("")}</select></label></div>
-        <div class="field"><label>Kind<select name="category">${["Mains", "Sides", "Breakfast", "Sweets", "Drinks", "Garden", "Babies", "Toddlers", "Pets"].map((item) => `<option ${value.category === item ? "selected" : ""}>${item}</option>`).join("")}</select></label></div>
+        <div class="field"><label>Kind<select name="category">${["Mains", "Sides", "Breakfast", "Sweets", "Drinks", "Garden", "Babies", "Toddlers", "Meals", "Pets"].map((item) => `<option ${value.category === item ? "selected" : ""}>${item}</option>`).join("")}</select></label></div>
       </div>
       <div class="field"><label>A short introduction<textarea name="summary">${esc(value.summary)}</textarea></label></div>
       <div class="split">
