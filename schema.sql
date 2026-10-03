@@ -24,6 +24,7 @@ CREATE TABLE IF NOT EXISTS recipes (
   source_url TEXT NOT NULL DEFAULT '',
   source_title TEXT NOT NULL DEFAULT '',
   family INTEGER NOT NULL DEFAULT 0,
+  author_id INTEGER,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
@@ -65,5 +66,27 @@ CREATE TABLE IF NOT EXISTS library_items (
   description TEXT NOT NULL DEFAULT '',
   notes TEXT NOT NULL DEFAULT '',
   file_path TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS follows (
+  follower_id INTEGER NOT NULL,
+  following_id INTEGER NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (follower_id, following_id)
+);
+CREATE TABLE IF NOT EXISTS reactions (
+  user_id INTEGER NOT NULL,
+  target_type TEXT NOT NULL,
+  target_id TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (user_id, target_type, target_id, kind)
+);
+CREATE TABLE IF NOT EXISTS comments (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  target_type TEXT NOT NULL,
+  target_id TEXT NOT NULL,
+  body TEXT NOT NULL,
   created_at TEXT NOT NULL
 );

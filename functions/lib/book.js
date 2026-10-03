@@ -125,9 +125,16 @@ async function recipeRow(env, row) {
     sourceUrl: row.source_url,
     sourceTitle: row.source_title,
     family: Boolean(row.family),
+    authorId: row.author_id || null,
     updatedAt: row.updated_at,
     media: media.results || []
   };
+}
+
+async function savedRecipe(env, user, id, status = 200) {
+  const recipe = await recipeRow(env, await env.DB.prepare("SELECT * FROM recipes WHERE id = ?").bind(id).first());
+  const [decorated] = await decorateRecipes(env, user, [recipe]);
+  return json({ recipe: decorated }, status);
 }
 
 async function slugify(env, title) {
@@ -204,7 +211,7 @@ async function uploadMedia(request, env, recipeId, url) {
         "INSERT INTO recipe_media (recipe_id, kind, path, caption, created_at) VALUES (?, ?, ?, ?, ?)"
       ).bind(recipe.id, kind, path, "", new Date().toISOString()).run();
     }
-    return json({ recipe: await recipeRow(env, await env.DB.prepare("SELECT * FROM recipes WHERE id = ?").bind(recipe.id).first()) }, 201);
+    return savedRecipe(env, user, recipe.id, 201);
   }
   let form;
   try {
@@ -227,7 +234,7 @@ async function uploadMedia(request, env, recipeId, url) {
       "INSERT INTO recipe_media (recipe_id, kind, path, caption, created_at) VALUES (?, ?, ?, ?, ?)"
     ).bind(recipe.id, kind, saved.meta.path, caption, new Date().toISOString()).run();
   }
-  return json({ recipe: await recipeRow(env, await env.DB.prepare("SELECT * FROM recipes WHERE id = ?").bind(recipe.id).first()) }, 201);
+  return savedRecipe(env, user, recipe.id, 201);
 }
 
 export async function handle(request, env) {
@@ -256,8 +263,8 @@ async function route(request, env, url, parts) {
   if (first === "auth" && second === "me" && method === "PATCH") return updateProfile(request, env);
   if (first === "auth" && second === "avatar" && method === "POST") return uploadAvatar(request, env);
 
-  if (first === "recipes" && !second && method === "GET") return listRecipes(url, env);
-  if (first === "recipes" && second && !third && method === "GET") return oneRecipe(env, second);
+  if (first === "recipes" && !second && method === "GET") return listRecipes(request, url, env);
+  if (first === "recipes" && second && !third && method === "GET") return oneRecipe(request, env, second);
   if (first === "recipes" && !second && method === "POST") return createRecipe(request, env);
   if (first === "recipes" && second && !third && method === "PATCH") return updateRecipe(request, env, second);
   if (first === "recipes" && second && !third && method === "DELETE") return deleteRecipe(request, env, second);
@@ -268,6 +275,12 @@ async function route(request, env, url, parts) {
   if (first === "notes" && !second && method === "POST") return createNote(request, env);
   if (first === "notes" && second && method === "PATCH") return updateNote(request, env, second);
   if (first === "notes" && second && method === "DELETE") return deleteNote(request, env, second);
+
+  if (first === "people" && !second && method === "GET") return listPeople(request, env);
+  if (first === "people" && second && third === "follow" && method === "POST") return toggleFollow(request, env, second);
+  if (first === "reactions" && !second && method === "POST") return toggleReaction(request, env);
+  if (first === "comments" && !second && method === "POST") return addComment(request, env);
+  if (first === "comments" && second && method === "DELETE") return deleteComment(request, env, second);
 
   if (first === "media" && !second && method === "POST") return startMedia(request, env);
   if (first === "media" && second === "parts" && method === "PUT") return saveMediaPart(request, env, url);
@@ -340,7 +353,8 @@ async function updateProfile(request, env) {
   return json({ user: publicUser(saved) });
 }
 
-async function listRecipes(url, env) {
+async function listRecipes(request, url, env) {
+  const user = await userFrom(env, request);
   const cuisine = String(url.searchParams.get("cuisine") || "");
   const q = String(url.searchParams.get("q") || "").trim();
   const rows = await env.DB.prepare(`
@@ -351,13 +365,15 @@ async function listRecipes(url, env) {
   `).bind(cuisine, cuisine, q, `%${q}%`, `%${q}%`).all();
   const recipes = [];
   for (const row of rows.results || []) recipes.push(await recipeRow(env, row));
-  return json({ recipes });
+  return json({ recipes: await decorateRecipes(env, user, recipes) });
 }
 
-async function oneRecipe(env, id) {
+async function oneRecipe(request, env, id) {
+  const user = await userFrom(env, request);
   const recipe = await recipeRow(env, await env.DB.prepare("SELECT * FROM recipes WHERE id = ?").bind(id).first());
   if (!recipe) return json({ error: "That recipe is not in the book." }, 404);
-  return json({ recipe });
+  const [decorated] = await decorateRecipes(env, user, [recipe]);
+  return json({ recipe: decorated });
 }
 
 async function createRecipe(request, env) {
@@ -375,9 +391,9 @@ async function createRecipe(request, env) {
   await env.DB.prepare(`
     INSERT INTO recipes (
       id, title, cuisine, category, summary, yield_text, prep_minutes, cook_minutes,
-      ingredients, steps, notes, image, image_credit, source_url, source_title, family,
+      ingredients, steps, notes, image, image_credit, source_url, source_title, family, author_id,
       created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', '', ?, ?, 0, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', '', ?, ?, 0, ?, ?, ?)
   `).bind(
     id,
     title,
@@ -392,10 +408,11 @@ async function createRecipe(request, env) {
     String(body.notes || "").slice(0, 2000),
     String(body.sourceUrl || "").slice(0, 500),
     String(body.sourceTitle || "").slice(0, 160),
+    user.id,
     now,
     now
   ).run();
-  return json({ recipe: await recipeRow(env, await env.DB.prepare("SELECT * FROM recipes WHERE id = ?").bind(id).first()) }, 201);
+  return savedRecipe(env, user, id, 201);
 }
 
 async function updateRecipe(request, env, id) {
@@ -403,6 +420,9 @@ async function updateRecipe(request, env, id) {
   if (!user) return json({ error: "Sign in first." }, 401);
   const existing = await env.DB.prepare("SELECT * FROM recipes WHERE id = ?").bind(id).first();
   if (!existing) return json({ error: "That recipe is not in the book." }, 404);
+  if (existing.author_id && String(existing.author_id) !== String(user.id)) {
+    return json({ error: "Only the person who added that recipe can change it." }, 403);
+  }
   const body = await readJson(request);
   const ingredients = body.ingredients != null
     ? (Array.isArray(body.ingredients) ? body.ingredients : lines(body.ingredients))
@@ -434,14 +454,17 @@ async function updateRecipe(request, env, id) {
     new Date().toISOString(),
     existing.id
   ).run();
-  return json({ recipe: await recipeRow(env, await env.DB.prepare("SELECT * FROM recipes WHERE id = ?").bind(existing.id).first()) });
+  return savedRecipe(env, user, existing.id);
 }
 
 async function deleteRecipe(request, env, id) {
   const user = await userFrom(env, request);
   if (!user) return json({ error: "Sign in first." }, 401);
-  const existing = await env.DB.prepare("SELECT id FROM recipes WHERE id = ?").bind(id).first();
+  const existing = await env.DB.prepare("SELECT id, author_id FROM recipes WHERE id = ?").bind(id).first();
   if (!existing) return json({ error: "That recipe is not in the book." }, 404);
+  if (existing.author_id && String(existing.author_id) !== String(user.id)) {
+    return json({ error: "Only the person who added that recipe can delete it." }, 403);
+  }
   await env.DB.prepare("DELETE FROM recipe_media WHERE recipe_id = ?").bind(id).run();
   await env.DB.prepare("DELETE FROM recipes WHERE id = ?").bind(id).run();
   return json({ ok: true });
@@ -454,7 +477,165 @@ async function deleteMedia(request, env, recipeId, mediaId) {
   if (!media) return json({ error: "That picture is already gone." }, 404);
   await removeStored(env, media.path);
   await env.DB.prepare("DELETE FROM recipe_media WHERE id = ?").bind(media.id).run();
-  return json({ recipe: await recipeRow(env, await env.DB.prepare("SELECT * FROM recipes WHERE id = ?").bind(recipeId).first()) });
+  return savedRecipe(env, user, recipeId);
+}
+
+function emptySocial() {
+  return { likes: 0, stars: 0, liked: false, starred: false, comments: [] };
+}
+
+function person(row) {
+  if (!row) return null;
+  return { id: row.id, name: row.name, bio: row.bio || "", avatar: row.avatar_path || row.avatar || "" };
+}
+
+async function socialFor(env, user, type, ids) {
+  const map = {};
+  const keys = [...new Set(ids.map((id) => String(id)))].filter(Boolean);
+  for (const id of keys) map[id] = emptySocial();
+  if (!keys.length) return map;
+  const marks = keys.map(() => "?").join(",");
+  const counts = await env.DB.prepare(
+    `SELECT target_id AS targetId, kind, COUNT(*) AS n FROM reactions WHERE target_type = ? AND target_id IN (${marks}) GROUP BY target_id, kind`
+  ).bind(type, ...keys).all();
+  for (const row of counts.results || []) {
+    const box = map[String(row.targetId)];
+    if (!box) continue;
+    if (row.kind === "like") box.likes = row.n;
+    if (row.kind === "star") box.stars = row.n;
+  }
+  if (user) {
+    const mine = await env.DB.prepare(
+      `SELECT target_id AS targetId, kind FROM reactions WHERE user_id = ? AND target_type = ? AND target_id IN (${marks})`
+    ).bind(user.id, type, ...keys).all();
+    for (const row of mine.results || []) {
+      const box = map[String(row.targetId)];
+      if (!box) continue;
+      if (row.kind === "like") box.liked = true;
+      if (row.kind === "star") box.starred = true;
+    }
+  }
+  const comments = await env.DB.prepare(
+    `SELECT comments.id, comments.body, comments.created_at AS createdAt, comments.target_id AS targetId,
+            users.id AS userId, users.name AS name, users.avatar_path AS avatar
+     FROM comments JOIN users ON users.id = comments.user_id
+     WHERE comments.target_type = ? AND comments.target_id IN (${marks})
+     ORDER BY comments.id ASC`
+  ).bind(type, ...keys).all();
+  for (const row of comments.results || []) {
+    map[String(row.targetId)]?.comments.push({
+      id: row.id,
+      body: row.body,
+      createdAt: row.createdAt,
+      author: { id: row.userId, name: row.name, avatar: row.avatar }
+    });
+  }
+  return map;
+}
+
+async function decorateRecipes(env, user, recipes) {
+  const social = await socialFor(env, user, "recipe", recipes.map((item) => item.id));
+  const ids = [...new Set(recipes.map((item) => item.authorId).filter(Boolean))];
+  const authors = {};
+  if (ids.length) {
+    const marks = ids.map(() => "?").join(",");
+    const rows = await env.DB.prepare(`SELECT id, name, bio, avatar_path FROM users WHERE id IN (${marks})`).bind(...ids).all();
+    for (const row of rows.results || []) authors[row.id] = person(row);
+  }
+  return recipes.map((item) => ({
+    ...item,
+    author: authors[item.authorId] || null,
+    social: social[String(item.id)] || emptySocial()
+  }));
+}
+
+async function targetExists(env, type, id) {
+  if (type === "recipe") return env.DB.prepare("SELECT id FROM recipes WHERE id = ?").bind(id).first();
+  if (type === "note") return env.DB.prepare("SELECT id FROM notes WHERE id = ?").bind(id).first();
+  if (type === "film") return env.DB.prepare("SELECT id FROM library_items WHERE id = ? AND kind NOT IN ('tiktok', 'facebook')").bind(id).first();
+  return null;
+}
+
+async function listPeople(request, env) {
+  const user = await userFrom(env, request);
+  if (!user) return json({ error: "Sign in first." }, 401);
+  const people = await env.DB.prepare("SELECT id, name, bio, avatar_path FROM users ORDER BY name COLLATE NOCASE").all();
+  const follows = await env.DB.prepare("SELECT follower_id AS followerId, following_id AS followingId FROM follows").all();
+  const rows = follows.results || [];
+  return json({
+    people: (people.results || []).map((row) => ({
+      ...person(row),
+      following: rows.some((item) => String(item.followerId) === String(user.id) && String(item.followingId) === String(row.id)),
+      followers: rows.filter((item) => String(item.followingId) === String(row.id)).length
+    }))
+  });
+}
+
+async function toggleFollow(request, env, id) {
+  const user = await userFrom(env, request);
+  if (!user) return json({ error: "Sign in first." }, 401);
+  if (String(user.id) === String(id)) return json({ error: "That is your own account." }, 400);
+  const other = await env.DB.prepare("SELECT id FROM users WHERE id = ?").bind(id).first();
+  if (!other) return json({ error: "That person is not in the book." }, 404);
+  const existing = await env.DB.prepare("SELECT 1 AS found FROM follows WHERE follower_id = ? AND following_id = ?").bind(user.id, id).first();
+  if (existing) {
+    await env.DB.prepare("DELETE FROM follows WHERE follower_id = ? AND following_id = ?").bind(user.id, id).run();
+    return json({ following: false });
+  }
+  await env.DB.prepare("INSERT INTO follows (follower_id, following_id, created_at) VALUES (?, ?, ?)").bind(user.id, id, new Date().toISOString()).run();
+  return json({ following: true });
+}
+
+async function toggleReaction(request, env) {
+  const user = await userFrom(env, request);
+  if (!user) return json({ error: "Sign in first." }, 401);
+  const body = await readJson(request);
+  const type = String(body.targetType || "");
+  const id = String(body.targetId || "");
+  const kind = body.kind === "star" ? "star" : "like";
+  if (!["recipe", "note", "film"].includes(type) || !id) return json({ error: "That could not be saved." }, 400);
+  if (!await targetExists(env, type, id)) return json({ error: "That is not in the book." }, 404);
+  const existing = await env.DB.prepare(
+    "SELECT 1 AS found FROM reactions WHERE user_id = ? AND target_type = ? AND target_id = ? AND kind = ?"
+  ).bind(user.id, type, id, kind).first();
+  if (existing) {
+    await env.DB.prepare(
+      "DELETE FROM reactions WHERE user_id = ? AND target_type = ? AND target_id = ? AND kind = ?"
+    ).bind(user.id, type, id, kind).run();
+    return json({ on: false });
+  }
+  await env.DB.prepare(
+    "INSERT INTO reactions (user_id, target_type, target_id, kind, created_at) VALUES (?, ?, ?, ?, ?)"
+  ).bind(user.id, type, id, kind, new Date().toISOString()).run();
+  return json({ on: true });
+}
+
+async function addComment(request, env) {
+  const user = await userFrom(env, request);
+  if (!user) return json({ error: "Sign in first." }, 401);
+  const body = await readJson(request);
+  const type = String(body.targetType || "");
+  const id = String(body.targetId || "");
+  const text = String(body.body || "").trim().slice(0, 1000);
+  if (!["recipe", "note", "film"].includes(type) || !id) return json({ error: "That comment could not be saved." }, 400);
+  if (!text) return json({ error: "Write a comment first." }, 400);
+  if (!await targetExists(env, type, id)) return json({ error: "That is not in the book." }, 404);
+  const now = new Date().toISOString();
+  const result = await env.DB.prepare(
+    "INSERT INTO comments (user_id, target_type, target_id, body, created_at) VALUES (?, ?, ?, ?, ?)"
+  ).bind(user.id, type, id, text, now).run();
+  return json({
+    comment: { id: result.meta.last_row_id, body: text, createdAt: now, author: person(user) }
+  }, 201);
+}
+
+async function deleteComment(request, env, id) {
+  const user = await userFrom(env, request);
+  if (!user) return json({ error: "Sign in first." }, 401);
+  const comment = await env.DB.prepare("SELECT id FROM comments WHERE id = ? AND user_id = ?").bind(id, user.id).first();
+  if (!comment) return json({ error: "That comment is not yours." }, 404);
+  await env.DB.prepare("DELETE FROM comments WHERE id = ?").bind(id).run();
+  return json({ ok: true });
 }
 
 function publicNote(row) {
@@ -468,7 +649,8 @@ function publicNote(row) {
     title: row.title,
     body: row.body,
     attachments,
-    updatedAt: row.updatedAt || row.updated_at
+    updatedAt: row.updatedAt || row.updated_at,
+    author: row.authorId ? { id: row.authorId, name: row.authorName || "Family", avatar: row.authorAvatar || "" } : null
   };
 }
 
@@ -645,10 +827,15 @@ async function storeUpload(env, file) {
 async function listNotes(request, env) {
   const user = await userFrom(env, request);
   if (!user) return json({ error: "Sign in first." }, 401);
-  const notes = await env.DB.prepare(
-    "SELECT id, title, body, attachments, updated_at AS updatedAt FROM notes WHERE user_id = ? ORDER BY updated_at DESC"
-  ).bind(user.id).all();
-  return json({ notes: (notes.results || []).map(publicNote) });
+  const notes = await env.DB.prepare(`
+    SELECT notes.id, notes.title, notes.body, notes.attachments, notes.updated_at AS updatedAt,
+           notes.user_id AS authorId, users.name AS authorName, users.avatar_path AS authorAvatar
+    FROM notes LEFT JOIN users ON users.id = notes.user_id
+    ORDER BY notes.updated_at DESC
+  `).all();
+  const rows = (notes.results || []).map(publicNote);
+  const social = await socialFor(env, user, "note", rows.map((item) => item.id));
+  return json({ notes: rows.map((item) => ({ ...item, social: social[String(item.id)] || emptySocial() })) });
 }
 
 async function createNote(request, env) {
@@ -731,10 +918,18 @@ async function listLibrary(request, env) {
   const user = await userFrom(env, request);
   if (!user) return json({ error: "Sign in first." }, 401);
   const items = await env.DB.prepare(`
-    SELECT id, kind, title, url, description, notes, file_path AS filePath, created_at AS createdAt
-    FROM library_items WHERE user_id = ? AND kind NOT IN ('tiktok', 'facebook') ORDER BY created_at DESC
-  `).bind(user.id).all();
-  return json({ items: items.results || [] });
+    SELECT library_items.id, kind, title, url, description, library_items.notes, file_path AS filePath, created_at AS createdAt,
+           library_items.user_id AS authorId, users.name AS authorName, users.avatar_path AS authorAvatar
+    FROM library_items LEFT JOIN users ON users.id = library_items.user_id
+    WHERE kind NOT IN ('tiktok', 'facebook')
+    ORDER BY created_at DESC
+  `).all();
+  const rows = (items.results || []).map((item) => ({
+    ...item,
+    author: item.authorId ? { id: item.authorId, name: item.authorName || "Family", avatar: item.authorAvatar || "" } : null
+  }));
+  const social = await socialFor(env, user, "film", rows.map((item) => item.id));
+  return json({ items: rows.map((item) => ({ ...item, social: social[String(item.id)] || emptySocial() })) });
 }
 
 function savedLinkKind(raw) {
@@ -855,22 +1050,22 @@ async function worldKeep(request, env, mealId) {
     const recipe = await worldRecipe(mealId);
     const existing = await env.DB.prepare("SELECT id FROM recipes WHERE source_url = ?").bind(recipe.sourceUrl).first();
     if (existing) {
-      return json({ recipe: await recipeRow(env, await env.DB.prepare("SELECT * FROM recipes WHERE id = ?").bind(existing.id).first()) });
+      return savedRecipe(env, user, existing.id);
     }
     const now = new Date().toISOString();
     const id = await slugify(env, recipe.title);
     await env.DB.prepare(`
       INSERT INTO recipes (
         id, title, cuisine, category, summary, yield_text, prep_minutes, cook_minutes,
-        ingredients, steps, notes, image, image_credit, source_url, source_title, family,
+        ingredients, steps, notes, image, image_credit, source_url, source_title, family, author_id,
         created_at, updated_at
-      ) VALUES (?, ?, 'library', ?, ?, ?, 0, 0, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
+      ) VALUES (?, ?, 'library', ?, ?, ?, 0, 0, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)
     `).bind(
       id, recipe.title, recipe.category, recipe.summary, recipe.yieldText,
       JSON.stringify(recipe.ingredients), JSON.stringify(recipe.steps), recipe.notes,
-      recipe.image, recipe.imageCredit, recipe.sourceUrl, recipe.sourceTitle, now, now
+      recipe.image, recipe.imageCredit, recipe.sourceUrl, recipe.sourceTitle, user.id, now, now
     ).run();
-    return json({ recipe: await recipeRow(env, await env.DB.prepare("SELECT * FROM recipes WHERE id = ?").bind(id).first()) }, 201);
+    return savedRecipe(env, user, id, 201);
   } catch (error) {
     return json({ error: error.message || "That plate could not be kept." }, error.status || 502);
   }
