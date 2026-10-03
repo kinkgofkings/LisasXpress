@@ -98,7 +98,7 @@ img { display: block; }
 .btn.moss { background: var(--moss); }
 .btn.quiet, .btn-line { background: transparent; color: var(--ink); border: 1px solid var(--line); }
 .btn.danger { background: transparent; color: var(--clay); border: 1px solid var(--clay); }
-.wrap { padding: 8px 6vw 72px; }
+.wrap { padding: 8px 6vw calc(112px + env(safe-area-inset-bottom)); }
 .hero {
   display: grid;
   grid-template-columns: 1.1fr 0.9fr;
@@ -372,14 +372,15 @@ img { display: block; }
 .split { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
 .film video, .frame { width: 100%; max-width: 100%; border: 0; border-radius: 16px; min-height: 220px; background: #111; }
 .toast {
-  position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%);
-  background: var(--ink); color: white; padding: 12px 16px; border-radius: 999px; z-index: 20;
+  position: fixed; bottom: calc(78px + env(safe-area-inset-bottom)); left: 50%; transform: translateX(-50%);
+  background: var(--ink); color: white; padding: 12px 16px; border-radius: 999px; z-index: 60;
+  max-width: calc(100% - 32px);
 }
 .btn.gold { background: linear-gradient(180deg, #f3d48a, #c9962c); color: #4a2c12; }
 .install-modal {
   position: fixed;
   inset: 0;
-  z-index: 40;
+  z-index: 80;
   display: grid;
   align-items: end;
   justify-items: center;
@@ -425,7 +426,7 @@ img { display: block; }
   to { transform: translateY(0); opacity: 1; }
 }
 .reader {
-  position: fixed; inset: 0; background: rgba(28, 20, 14, 0.45); z-index: 30;
+  position: fixed; inset: 0; background: rgba(28, 20, 14, 0.45); z-index: 70;
   display: grid; place-items: center; padding: 18px;
 }
 .reader-sheet {
@@ -473,9 +474,154 @@ img { display: block; }
   .nav { max-width: 100%; }
   .plate { aspect-ratio: 5 / 4; max-height: none; }
 }
+.appbar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 50;
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 2px;
+  margin: 0;
+  padding: 6px 8px calc(6px + env(safe-area-inset-bottom));
+  background: rgba(255, 253, 253, 0.96);
+  border-top: 1px solid var(--line);
+  box-shadow: 0 -12px 32px rgba(173, 20, 87, 0.1);
+  backdrop-filter: blur(14px);
+}
+.appbar-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  min-height: 56px;
+  min-width: 0;
+  margin: 0;
+  padding: 4px 2px;
+  border: 0;
+  border-radius: 16px;
+  background: transparent;
+  color: var(--muted);
+  text-decoration: none;
+  font-size: 11px;
+  font-weight: 640;
+  letter-spacing: 0.01em;
+  line-height: 1.1;
+}
+.appbar-item i { font-size: 22px; line-height: 1; }
+.appbar-item span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.appbar-item.active { color: var(--moss); background: var(--blush); }
+body.menu-open { overflow: hidden; }
+.scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  background: rgba(61, 36, 51, 0.42);
+}
+.scrim.fresh { animation: scrim-in 0.28s ease both; }
+.sheet {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: calc(68px + env(safe-area-inset-bottom));
+  z-index: 45;
+  max-height: calc(100dvh - 68px - env(safe-area-inset-bottom));
+  overflow: auto;
+  padding: 6px 14px 12px;
+  background: var(--card);
+  border-radius: 28px 28px 0 0;
+  box-shadow: 0 -24px 60px rgba(136, 14, 79, 0.22);
+}
+.sheet.fresh { animation: sheet-rise 0.72s cubic-bezier(0.16, 0.84, 0.28, 1) both; }
+.sheet-top {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  min-height: 36px;
+  margin-bottom: 6px;
+}
+.sheet-handle {
+  position: absolute;
+  left: 50%;
+  width: 46px;
+  height: 5px;
+  border-radius: 999px;
+  background: #f3b6cc;
+  transform: translateX(-50%);
+}
+.sheet-top .btn { padding: 8px 12px; }
+.session {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  padding: 2px 4px 8px;
+}
+.session .face, .session .face-ph { width: 52px; height: 52px; font-size: 24px; }
+.session .face-ph i { font-size: 26px; line-height: 1; }
+.session h3 {
+  margin: 2px 0 0;
+  font-family: var(--serif);
+  font-size: 24px;
+  line-height: 1;
+  letter-spacing: -0.03em;
+}
+.session p { margin: 2px 0 0; }
+.menu-label {
+  margin: 8px 4px 6px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  font-size: 12px;
+  color: var(--clay);
+  font-weight: 640;
+}
+.menu-list { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.menu-link {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+  margin: 0;
+  padding: 11px 10px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--paper);
+  color: var(--ink);
+  text-align: left;
+  text-decoration: none;
+  font-weight: 500;
+}
+.menu-link i { width: 24px; flex: none; font-size: 20px; color: var(--moss); text-align: center; }
+.menu-link span { min-width: 0; }
+.menu-link.on { background: var(--blush); border-color: #f48fb1; }
+.legal h3 {
+  font-family: var(--serif);
+  font-size: 28px;
+  line-height: 1.05;
+  margin: 18px 0 8px;
+}
+.legal h3:first-child { margin-top: 0; }
+.legal p { margin: 0 0 12px; }
+@keyframes scrim-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes sheet-rise {
+  0% { transform: translateY(110%); }
+  58% { transform: translateY(-16px); }
+  76% { transform: translateY(7px); }
+  90% { transform: translateY(-3px); }
+  100% { transform: translateY(0); }
+}
+@media (min-width: 800px) {
+  .sheet { width: min(720px, calc(100% - 32px)); margin-inline: auto; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .sheet.fresh, .scrim.fresh { animation: none; }
+}
 @media print {
   body { background: white; }
-  .mast, .toolbar, .actions, .no-print, .reader, .toast, .install-modal { display: none !important; }
+  .mast, .toolbar, .actions, .no-print, .reader, .toast, .install-modal, .appbar, .scrim, .sheet { display: none !important; }
   .recipe { display: block; }
   .plate { aspect-ratio: auto; max-height: none; box-shadow: none; }
   .plate img { position: static; height: auto; max-height: 280px; width: 100%; object-fit: contain; }

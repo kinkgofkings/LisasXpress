@@ -37,7 +37,9 @@ const state = {
   bookHitLoading: false,
   qFocus: false,
   qCaret: 0,
-  shelfNotice: ""
+  shelfNotice: "",
+  menu: false,
+  menuFresh: false
 };
 const timer = { endAt: 0, pausedRemaining: 0, running: false, handle: null, alerted: false };
 let deferredInstall = null;
@@ -176,16 +178,6 @@ function installedAlready() {
 }
 
 function shell(main) {
-  const here = route().name;
-  const links = [["home", "Book"], ["library", "Library"], ["notes", "Notepad"], ["studio", "Studio"], ["family", "Family"], ["profile", "Profile"]];
-  const avatar = state.user?.avatar
-    ? `<img class="avatar" alt="" src="${esc(asset(state.user.avatar))}" style="width:36px;height:36px">`
-    : "";
-  const active = (id) => {
-    if (id === "home") return here === "home" || here === "recipe";
-    if (id === "library") return here === "library" || here === "world";
-    return here === id;
-  };
   return `
     <header class="mast">
       <a class="brand" href="#/">
@@ -195,15 +187,123 @@ function shell(main) {
           <h1>Lisa's Recipe Book</h1>
         </span>
       </a>
-      <nav class="nav">
-        ${links.map(([id, label]) => `<a class="${active(id) ? "active" : ""}" href="#/${id === "home" ? "" : id}">${label}</a>`).join("")}
-        ${state.user ? `<a href="#/profile">${avatar || esc(state.user.name.split(" ")[0])}</a><button class="btn quiet" type="button" data-action="sign-out">Log out</button>` : `<a class="btn ${here === "account" ? "active" : ""}" href="#/account">Log in</a>`}
-      </nav>
     </header>
     <main class="wrap">${main}</main>
+    ${appBar()}
+    ${state.menu ? superMenu() : ""}
     ${state.reader ? reader() : ""}
     ${state.toast ? `<div class="toast">${esc(state.toast)}</div>` : ""}
   `;
+}
+
+function sectionOn(id) {
+  const here = route().name;
+  if (id === "home") return here === "home" || here === "recipe";
+  if (id === "library") return here === "library" || here === "world";
+  if (id === "write") return here === "new" || here === "edit";
+  return here === id;
+}
+
+function appBar() {
+  const menuOn = state.menu || ["family", "profile", "account", "privacy", "terms", "new", "edit"].includes(route().name);
+  const item = (href, icon, label, on) => `<a class="appbar-item ${on ? "active" : ""}" href="${href}" ${on ? 'aria-current="page"' : ""}><i class="bi ${icon}" aria-hidden="true"></i><span>${label}</span></a>`;
+  return `<nav class="appbar" aria-label="Sections">
+    ${item("#/", "bi-book", "Book", sectionOn("home"))}
+    ${item("#/library", "bi-collection", "Library", sectionOn("library"))}
+    ${item("#/notes", "bi-journal-text", "Notepad", sectionOn("notes"))}
+    ${item("#/studio", "bi-camera-reels", "Studio", sectionOn("studio"))}
+    <button class="appbar-item ${menuOn ? "active" : ""}" type="button" data-action="toggle-menu" aria-expanded="${state.menu ? "true" : "false"}" aria-controls="super-menu">
+      <i class="bi bi-grid" aria-hidden="true"></i><span>Menu</span>
+    </button>
+  </nav>`;
+}
+
+function menuLink(href, icon, label, on) {
+  return `<a class="menu-link ${on ? "on" : ""}" href="${href}"><i class="bi ${icon}" aria-hidden="true"></i><span>${label}</span></a>`;
+}
+
+function superMenu() {
+  const user = state.user;
+  const session = user
+    ? `<div class="session">
+        ${face(user)}
+        <div>
+          <p class="kicker">Signed in</p>
+          <h3>${esc(user.name)}</h3>
+          <p class="empty">${esc(user.email || "")}</p>
+          ${user.bio ? `<p>${esc(user.bio)}</p>` : `<p class="empty">Your profile is ready.</p>`}
+        </div>
+      </div>`
+    : `<div class="session">
+        <span class="face-ph"><i class="bi bi-person" aria-hidden="true"></i></span>
+        <div>
+          <p class="kicker">This visit</p>
+          <h3>Browsing as a guest</h3>
+          <p class="empty">Log in to write recipes, leave notes, and see the family.</p>
+        </div>
+      </div>`;
+  return `<div class="scrim ${state.menuFresh ? "fresh" : ""}" data-action="close-menu"></div>
+    <section id="super-menu" class="sheet ${state.menuFresh ? "fresh" : ""}" role="dialog" aria-modal="true" aria-label="Menu">
+      <div class="sheet-top">
+        <span class="sheet-handle" aria-hidden="true"></span>
+        <button class="btn quiet" type="button" data-action="close-menu">Close</button>
+      </div>
+      ${session}
+      <p class="menu-label">The book</p>
+      <div class="menu-list">
+        ${menuLink("#/", "bi-book", "Book", sectionOn("home"))}
+        ${menuLink("#/library", "bi-collection", "Library", sectionOn("library"))}
+        ${menuLink("#/notes", "bi-journal-text", "Notepad", sectionOn("notes"))}
+        ${menuLink("#/studio", "bi-camera-reels", "Studio", sectionOn("studio"))}
+        ${menuLink("#/family", "bi-people", "Family", sectionOn("family"))}
+        ${menuLink("#/new", "bi-plus-circle", "Write a recipe", sectionOn("write"))}
+      </div>
+      <p class="menu-label">Account</p>
+      <div class="menu-list">
+        ${user ? menuLink("#/profile", "bi-person-circle", "Profile", sectionOn("profile")) : menuLink("#/account", "bi-box-arrow-in-right", "Log in", sectionOn("account"))}
+        ${user ? `<button class="menu-link" type="button" data-action="sign-out"><i class="bi bi-box-arrow-right" aria-hidden="true"></i><span>Log out</span></button>` : ""}
+      </div>
+      <p class="menu-label">About this book</p>
+      <div class="menu-list">
+        ${menuLink("#/privacy", "bi-shield-check", "Privacy", sectionOn("privacy"))}
+        ${menuLink("#/terms", "bi-file-earmark-text", "Terms of use", sectionOn("terms"))}
+      </div>
+    </section>`;
+}
+
+function privacyView() {
+  return shell(`
+    <h2 class="page-title">Privacy</h2>
+    <p>This is a family book for Lisa Miller and the people she invites. It is not a public social network.</p>
+    <section class="panel legal">
+      <h3>What the book keeps</h3>
+      <p>An account holds a name, an email, and a password. The password is stored as a code, not as the words you type. You can also add a short line about yourself and a portrait.</p>
+      <p>The book also keeps recipes, notes, pictures, films, comments, likes, stars, and who follows whom.</p>
+      <h3>Who can see it</h3>
+      <p>Anyone with an account sees the same recipes, notes, and films. A guest can read the recipes without logging in. Notes, the studio, and the family list stay behind the login.</p>
+      <h3>What we do not do</h3>
+      <p>We do not sell this information, and the book does not show ads. A portrait you paste from a link is loaded from that address. A YouTube film plays from YouTube, under YouTube's own rules.</p>
+      <h3>Where it lives</h3>
+      <p>The book is hosted on Cloudflare. Open Profile to change your name, your line about yourself, or your portrait. Log out when you are done on a shared phone. If you want an account taken off the book, ask the person who set it up.</p>
+    </section>
+  `);
+}
+
+function termsView() {
+  return shell(`
+    <h2 class="page-title">Terms of use</h2>
+    <p>Use the book the way you would use a family kitchen: share what you mean to share, and be kind.</p>
+    <section class="panel legal">
+      <h3>A family book</h3>
+      <p>Recipes, notes, pictures, and films you add are for everyone with an account. Write what is yours to share. Leave out passwords, private messages, and pictures someone did not want here.</p>
+      <h3>Kitchen notes, not medical advice</h3>
+      <p>The recipes are cooking help. Baby food, toddler snacks, and dog meals are starting ideas for the kitchen. Ask a doctor before a baby's food changes, and ask a vet before a dog's food changes. A dog meal on this book is not a commercial dog-food formula. Low-acid vegetables, such as green beans, need a pressure canner. A boiling-water bath is not enough for those jars.</p>
+      <h3>Films and outside pages</h3>
+      <p>A saved YouTube link is a bookmark. The film still belongs to the person who made it. Recipe pages opened from another site stay with that site.</p>
+      <h3>Keeping the table pleasant</h3>
+      <p>Notes and comments should be fit for the whole family, including Lisa. Something that does not belong in a family book can be taken down.</p>
+    </section>
+  `);
 }
 
 function installCard(mode) {
@@ -805,11 +905,19 @@ function render() {
   } else if (current.name === "profile" || current.name === "account") {
     document.title = current.name === "account" ? "Log in · Lisa's Recipe Book" : "Profile · Lisa's Recipe Book";
     html = current.name === "profile" ? profile() : accountGate("Log in with your email and password. First time here? Create an account in the next box.");
+  } else if (current.name === "privacy") {
+    document.title = "Privacy · Lisa's Recipe Book";
+    html = privacyView();
+  } else if (current.name === "terms") {
+    document.title = "Terms of use · Lisa's Recipe Book";
+    html = termsView();
   } else {
     document.title = "Lisa's Recipe Book";
     html = home();
   }
   root.innerHTML = html;
+  state.menuFresh = false;
+  document.body.classList.toggle("menu-open", state.menu);
   const preview = document.getElementById("live-preview");
   if (preview && state.recording?.stream) {
     preview.srcObject = state.recording.stream;
@@ -915,6 +1023,12 @@ document.addEventListener("click", async (event) => {
     const href = link.getAttribute("href");
     if (href && href.startsWith("http")) await openSource(href, link.textContent);
     return;
+  }
+  const jump = event.target.closest("a.menu-link, a.appbar-item");
+  if (jump && state.menu) {
+    state.menu = false;
+    const next = jump.hash || "#/";
+    if (next === (location.hash || "#/")) render();
   }
   const button = event.target.closest("[data-action], [data-cuisine], [data-shelf]");
   if (!button) return;
@@ -1051,7 +1165,22 @@ document.addEventListener("click", async (event) => {
       render();
     }
     if (action === "retry-world") { state.worldMiss = ""; state.worldError = ""; render(); }
-    if (action === "sign-out") { localStorage.removeItem("lisa-token"); state.user = null; go("#/"); }
+    if (action === "sign-out") {
+      localStorage.removeItem("lisa-token");
+      state.user = null;
+      state.menu = false;
+      if (!location.hash || location.hash === "#/" || location.hash === "#") render();
+      else go("#/");
+    }
+    if (action === "toggle-menu") {
+      state.menu = !state.menu;
+      state.menuFresh = state.menu;
+      render();
+    }
+    if (action === "close-menu") {
+      state.menu = false;
+      render();
+    }
   } catch (error) {
     if (error?.name !== "AbortError") say(error.message || "That did not work.");
   }
@@ -1508,7 +1637,10 @@ function closeCamera() {
   }
 }
 
-window.addEventListener("hashchange", () => { state.reader = null; render(); });
+window.addEventListener("hashchange", () => { state.reader = null; state.menu = false; render(); });
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && state.menu) { state.menu = false; render(); }
+});
 
 function saveTimer() {
   localStorage.setItem("lisa-timer", JSON.stringify({
