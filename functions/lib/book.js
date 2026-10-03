@@ -249,6 +249,9 @@ async function route(request, env, url, parts) {
   if (first === "notes" && second && method === "PATCH") return updateNote(request, env, second);
   if (first === "notes" && second && method === "DELETE") return deleteNote(request, env, second);
 
+  if (first === "films" && !second && method === "POST") return startFilm(request, env);
+  if (first === "films" && second === "parts" && method === "PUT") return saveFilmPart(request, env, url);
+
   if (first === "library" && !second && method === "GET") return listLibrary(request, env);
   if (first === "library" && !second && method === "POST") return createLibrary(request, env);
   if (first === "library" && second && method === "PATCH") return updateLibrary(request, env, second);
@@ -446,6 +449,77 @@ function publicNote(row) {
   };
 }
 
+const FILM_PART = 800_000;
+
+function videoExt(mime) {
+  if (mime.includes("mp4")) return "mp4";
+  if (mime.includes("quicktime")) return "mov";
+  return "webm";
+}
+
+async function storeVideo(env, mime, bytes) {
+  const path = `/uploads/${Date.now()}-${crypto.randomUUID().slice(0, 8)}.${videoExt(mime)}`;
+  await env.DB.prepare(
+    "INSERT INTO files (path, mime, bytes, byte_size, part_size) VALUES (?, ?, ?, ?, ?)"
+  ).bind(path, mime, new Uint8Array([0]), bytes.byteLength, FILM_PART).run();
+  for (let idx = 0, offset = 0; offset < bytes.byteLength; idx += 1, offset += FILM_PART) {
+    const slice = bytes.subarray(offset, Math.min(offset + FILM_PART, bytes.byteLength));
+    await env.DB.prepare("INSERT INTO file_parts (path, idx, bytes) VALUES (?, ?, ?)").bind(path, idx, slice).run();
+  }
+  return path;
+}
+
+async function startFilm(request, env) {
+  const user = await userFrom(env, request);
+  if (!user) return json({ error: "Sign in first." }, 401);
+  const body = await readJson(request);
+  const title = String(body.title || "").trim().slice(0, 160);
+  if (!title) return json({ error: "Give the film a title." }, 400);
+  const mime = String(body.mime || "").split(";")[0].trim().toLowerCase();
+  if (!/^video\/(mp4|webm|quicktime)$/.test(mime)) return json({ error: "Use an MP4 or WebM video." }, 400);
+  const size = Number(body.size);
+  if (!Number.isFinite(size) || size < 1) return json({ error: "That film was empty." }, 400);
+  const path = `/uploads/${Date.now()}-${crypto.randomUUID().slice(0, 8)}.${videoExt(mime)}`;
+  const description = String(body.description || "").slice(0, 5000);
+  const now = new Date().toISOString();
+  await env.DB.prepare(
+    "INSERT INTO files (path, mime, bytes, byte_size, part_size) VALUES (?, ?, ?, ?, ?)"
+  ).bind(path, mime, new Uint8Array([0]), size, FILM_PART).run();
+  const result = await env.DB.prepare(`
+    INSERT INTO library_items (user_id, kind, title, url, description, notes, file_path, created_at)
+    VALUES (?, 'film', ?, '', ?, '', ?, ?)
+  `).bind(user.id, title, description, path, now).run();
+  return json({ id: result.meta.last_row_id, path, partSize: FILM_PART }, 201);
+}
+
+async function saveFilmPart(request, env, url) {
+  const user = await userFrom(env, request);
+  if (!user) return json({ error: "Sign in first." }, 401);
+  const path = String(url.searchParams.get("path") || "");
+  const idx = Number(url.searchParams.get("idx"));
+  if (!/^\/uploads\/[\w.-]+$/.test(path) || !Number.isInteger(idx) || idx < 0) {
+    return json({ error: "That film could not be saved." }, 400);
+  }
+  const owned = await env.DB.prepare(
+    "SELECT id FROM library_items WHERE file_path = ? AND user_id = ? AND kind = 'film'"
+  ).bind(path, user.id).first();
+  if (!owned) return json({ error: "That film is not yours." }, 404);
+  let bytes;
+  try {
+    bytes = new Uint8Array(await request.arrayBuffer());
+  } catch {
+    return json({ error: "That film could not be saved. Try again." }, 400);
+  }
+  if (!bytes.byteLength || bytes.byteLength > 1_000_000) {
+    return json({ error: "That film could not be saved. Try again." }, 400);
+  }
+  await env.DB.prepare(`
+    INSERT INTO file_parts (path, idx, bytes) VALUES (?, ?, ?)
+    ON CONFLICT(path, idx) DO UPDATE SET bytes = excluded.bytes
+  `).bind(path, idx, bytes).run();
+  return json({ ok: true });
+}
+
 function noteTitle(text, attachments) {
   const line = text.trim().split(/\n/)[0].slice(0, 80);
   if (line) return line;
@@ -472,13 +546,12 @@ async function storeUpload(env, file) {
   }
   const bytes = new Uint8Array(await file.arrayBuffer());
   if (!bytes.byteLength) return { error: json({ error: "That file was empty." }, 400) };
-  const limit = 1_500_000;
-  if (bytes.byteLength > limit) {
-    const message = kind === "video"
-      ? "That video is too big to keep. Try a short clip."
-      : "That file is too large.";
-    return { error: json({ error: message }, 400) };
+  if (kind === "video") {
+    const path = await storeVideo(env, type, bytes);
+    const name = String(file.name || "Video").replace(/[^\w.\- ]+/g, "").slice(0, 80) || "Video";
+    return { meta: { path, mime: type, name, kind } };
   }
+  if (bytes.byteLength > 1_500_000) return { error: json({ error: "That file is too large." }, 400) };
   const ext = {
     "image/jpeg": "jpg",
     "image/png": "png",
@@ -607,7 +680,7 @@ async function saveFilm(env, user, request) {
   try {
     form = await request.formData();
   } catch {
-    return json({ error: "That film could not be read. Try a shorter take." }, 400);
+    return json({ error: "That film could not be read. Try saving it again." }, 400);
   }
   const title = String(form.get("title") || "").trim().slice(0, 160);
   if (!title) return json({ error: "Give the film a title." }, 400);
