@@ -8,9 +8,31 @@ const state = {
   cuisine: "all",
   reader: null,
   toast: "",
-  recording: null
+  recording: null,
+  shelf: [],
+  shelfCategories: [],
+  shelfCategory: "Chicken",
+  shelfQ: "",
+  shelfLoading: false,
+  shelfError: "",
+  shelfSeq: 0,
+  shelfFocus: false,
+  shelfCaret: 0,
+  featured: [],
+  worldCache: {},
+  worldMiss: "",
+  worldError: "",
+  worldLoading: false,
+  showInstall: "",
+  noteDraft: "",
+  noteFiles: [],
+  editingNote: "",
+  filmDraft: { title: "", description: "" },
+  libraryEdit: ""
 };
-const timer = { seconds: 0, handle: null };
+const timer = { endAt: 0, pausedRemaining: 0, running: false, handle: null, alerted: false };
+let deferredInstall = null;
+let wakeLock = null;
 
 const $ = (html) => html;
 const esc = (value) => String(value ?? "").replace(/[&<>"']/g, (ch) => ({
@@ -20,8 +42,27 @@ const esc = (value) => String(value ?? "").replace(/[&<>"']/g, (ch) => ({
 function asset(src) {
   if (!src) return "";
   if (/^https?:\/\//.test(src)) return src;
-  if (src.startsWith("/uploads/")) return `${API}${src}`;
+  if (src.startsWith("/uploads/")) return `${API}${src}${src.includes("?") ? "&" : "?"}v=2`;
   return src;
+}
+
+async function shrinkImage(file) {
+  if (!file || typeof file === "string" || !file.type?.startsWith("image/") || file.type === "image/gif") return file;
+  try {
+    const bitmap = await createImageBitmap(file);
+    const max = 1400;
+    const scale = Math.min(1, max / Math.max(bitmap.width, bitmap.height));
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+    canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+    canvas.getContext("2d").drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+    bitmap.close?.();
+    const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.82));
+    if (!blob) return file;
+    return new File([blob], "photo.jpg", { type: "image/jpeg" });
+  } catch {
+    return file;
+  }
 }
 
 async function api(path, options = {}) {
@@ -59,7 +100,14 @@ function clock(mins) {
   return `${n} min`;
 }
 function recipeLink(recipe) {
-  return `${location.origin}${location.pathname}#/recipe/${recipe.id}`;
+  const hash = recipe.world ? `#/world/${recipe.mealId}` : `#/recipe/${recipe.id}`;
+  return `${location.origin}${location.pathname}${hash}`;
+}
+function cuisineLabel(cuisine) {
+  if (cuisine === "cajun") return "Cajun";
+  if (cuisine === "texas") return "Texas";
+  if (cuisine === "library") return "Library";
+  return cuisine || "";
 }
 function youtubeId(url) {
   try {
@@ -69,29 +117,84 @@ function youtubeId(url) {
   } catch { return ""; }
 }
 function pad(n) { return String(n).padStart(2, "0"); }
-function timerText() { return `${pad(Math.floor(timer.seconds / 60))}:${pad(timer.seconds % 60)}`; }
+function remainingSeconds() {
+  if (timer.running) return Math.max(0, Math.ceil((timer.endAt - Date.now()) / 1000));
+  return timer.pausedRemaining;
+}
+function timerText() {
+  const seconds = remainingSeconds();
+  return `${pad(Math.floor(seconds / 60))}:${pad(seconds % 60)}`;
+}
+function installedAlready() {
+  return window.matchMedia("(display-mode: standalone)").matches || window.navigator.standalone === true;
+}
 
 function shell(main) {
   const here = route().name;
-  const links = [["home", "Book"], ["notes", "Notepad"], ["studio", "Studio"], ["profile", "Profile"]];
+  const links = [["home", "Book"], ["library", "Library"], ["notes", "Notepad"], ["studio", "Studio"], ["profile", "Profile"]];
   const avatar = state.user?.avatar
     ? `<img class="avatar" alt="" src="${esc(asset(state.user.avatar))}" style="width:36px;height:36px">`
     : "";
+  const active = (id) => {
+    if (id === "home") return here === "home" || here === "recipe";
+    if (id === "library") return here === "library" || here === "world";
+    return here === id;
+  };
   return `
     <header class="mast">
       <a class="brand" href="#/">
-        <p class="eyebrow">For Lisa Miller</p>
-        <h1>Lisa's Recipe Book</h1>
+        <img class="ribbon-mark" src="/ribbon.svg" alt="">
+        <span>
+          <p class="eyebrow">For Lisa Miller</p>
+          <h1>Lisa's Recipe Book</h1>
+        </span>
       </a>
       <nav class="nav">
-        ${links.map(([id, label]) => `<a class="${here === id || (id === "home" && here === "recipe") ? "active" : ""}" href="#/${id === "home" ? "" : id}">${label}</a>`).join("")}
-        ${state.user ? `<a href="#/profile">${avatar || esc(state.user.name.split(" ")[0])}</a>` : `<a class="${here === "account" ? "active" : ""}" href="#/account">Set up profile</a>`}
+        ${links.map(([id, label]) => `<a class="${active(id) ? "active" : ""}" href="#/${id === "home" ? "" : id}">${label}</a>`).join("")}
+        ${state.user ? `<a href="#/profile">${avatar || esc(state.user.name.split(" ")[0])}</a><button class="btn quiet" type="button" data-action="sign-out">Log out</button>` : `<a class="btn ${here === "account" ? "active" : ""}" href="#/account">Log in</a>`}
       </nav>
     </header>
     <main class="wrap">${main}</main>
     ${state.reader ? reader() : ""}
     ${state.toast ? `<div class="toast">${esc(state.toast)}</div>` : ""}
   `;
+}
+
+function installCard(mode) {
+  const ios = mode === "ios";
+  const ready = mode === "ready";
+  const kicker = ios ? "On iPhone" : ready ? "On this phone" : "On this device";
+  const title = ready ? "Install Lisa's book" : "Add Lisa's book";
+  const copy = ios
+    ? "Tap the Share button, then Add to Home Screen. The pink ribbon will sit with your apps, and the kitchen timer can keep its place."
+    : ready
+      ? "Put the book on your home screen. It opens like an app, dressed in pink and gold, and the timer keeps counting when the phone is locked."
+      : "Open the browser menu and choose Install app or Add to Home Screen. Look for the pink ribbon.";
+  const install = ready ? `<button class="btn gold" type="button" data-action="install-app">Install</button>` : "";
+  return `<div class="install-modal" id="install-modal" data-mode="${mode}" role="dialog" aria-labelledby="install-title">
+    <div class="install-card">
+      <img class="install-mark" src="/icons/icon-192.png" alt="">
+      <p class="kicker">${kicker}</p>
+      <h2 id="install-title">${title}</h2>
+      <p>${copy}</p>
+      <div class="actions">${install}<button class="btn quiet" type="button" data-action="dismiss-install">Not now</button></div>
+    </div>
+  </div>`;
+}
+
+function paintInstall() {
+  const hidden = !state.showInstall || installedAlready() || localStorage.getItem("lisa-install-hide");
+  const modal = document.getElementById("install-modal");
+  if (hidden) {
+    if (modal && !modal.classList.contains("leaving")) {
+      modal.classList.add("leaving");
+      setTimeout(() => modal.remove(), 340);
+    }
+    return;
+  }
+  if (modal?.dataset.mode === state.showInstall && !modal.classList.contains("leaving")) return;
+  modal?.remove();
+  document.body.insertAdjacentHTML("beforeend", installCard(state.showInstall));
 }
 
 function home() {
@@ -105,29 +208,56 @@ function home() {
   return shell(`
     <section class="hero">
       <div class="hero-copy">
-        <p class="eyebrow" style="color:#e7c7a2">Cajun & Texas</p>
-        <h2 class="page-title" style="color:#fffaf4;font-size:clamp(42px,6vw,72px)">A table with your name on it.</h2>
-        <p>Thirty plates from the bayou and the Hill Country, including the ones already written in Tex's kitchen. Add your own, print them, and send them on.</p>
-        <div class="actions"><a class="btn" href="#/new">Add a recipe</a>${state.user ? `<a class="btn quiet" href="#/studio" style="color:#fff;border-color:rgba(255,255,255,.3)">Open the studio</a>` : `<a class="btn quiet" href="#/account" style="color:#fff;border-color:rgba(255,255,255,.3)">Create your profile</a>`}</div>
+        <p class="eyebrow">Cajun, Texas, and the open library</p>
+        <h2 class="page-title" style="font-size:clamp(42px,6vw,72px)">A table with your name on it.</h2>
+        <p>Your plates from the bayou and the Hill Country, dressed in survivor pink, with a whole library when you want something new.</p>
+        <div class="actions">
+          <a class="btn" href="#/library">Browse the library</a>
+          <a class="btn quiet" href="#/new">Add a recipe</a>
+          ${state.user ? `<a class="btn quiet" href="#/studio">Open the studio</a>` : `<a class="btn quiet" href="#/account">Log in</a>`}
+        </div>
       </div>
       ${featured ? `<a class="hero-photo" href="#/recipe/${featured.id}" style="background-image:url('${esc(asset(featured.image))}')"><span>${esc(featured.title)}</span></a>` : ""}
     </section>
     <div class="toolbar">
       <input id="q" placeholder="Search the book" value="${esc(state.q)}">
-      ${["all", "texas", "cajun"].map((item) => `<button class="chip ${state.cuisine === item ? "active" : ""}" data-cuisine="${item}">${item === "all" ? "All" : item === "texas" ? "Texas" : "Cajun"}</button>`).join("")}
+      ${[["all", "All"], ["texas", "Texas"], ["cajun", "Cajun"], ["library", "Kept"]].map(([item, label]) => `<button type="button" class="chip ${state.cuisine === item ? "active" : ""}" data-cuisine="${item}">${label}</button>`).join("")}
       <span class="empty">${list.length} recipes</span>
     </div>
     <section class="grid">
-      ${list.map(card).join("") || `<p class="empty">Nothing matches that search.</p>`}
+      ${list.map(card).join("") || `<p class="empty">${state.cuisine === "library" ? "Nothing kept from the library yet. Browse below and keep a plate." : "Nothing matches that search."}</p>`}
+    </section>
+    <section class="library-band">
+      <div class="band-head">
+        <div>
+          <p class="kicker">Open library</p>
+          <h2>More plates, in the same book.</h2>
+        </div>
+        <a class="btn" href="#/library">See the whole library</a>
+      </div>
+      <div class="grid">
+        ${state.featured.map(worldCard).join("") || `<p class="empty">${esc(state.shelfError || "The library is on its way.")}</p>`}
+      </div>
     </section>
   `);
+}
+
+function worldCard(meal) {
+  return `<a class="card" href="#/world/${esc(meal.id)}">
+    ${meal.image ? `<img src="${esc(meal.image)}" alt="${esc(meal.title)}">` : `<div class="ph"></div>`}
+    <div>
+      <div class="kicker">Library${meal.category ? ` · ${esc(meal.category)}` : ""}${meal.area ? ` · ${esc(meal.area)}` : ""}</div>
+      <h2>${esc(meal.title)}</h2>
+      <p>Open it, then keep it beside your own recipes.</p>
+    </div>
+  </a>`;
 }
 
 function card(recipe) {
   return `<a class="card" href="#/recipe/${recipe.id}">
     ${recipe.image ? `<img src="${esc(asset(recipe.image))}" alt="${esc(recipe.title)}">` : `<div class="ph"></div>`}
     <div>
-      <div class="kicker">${esc(recipe.cuisine)} · ${esc(recipe.category)}${recipe.family ? `<span class="badge">Tex's kitchen</span>` : ""}</div>
+      <div class="kicker">${esc(cuisineLabel(recipe.cuisine))} · ${esc(recipe.category)}${recipe.family ? `<span class="badge">Tex's kitchen</span>` : ""}</div>
       <h2>${esc(recipe.title)}</h2>
       <p>${esc(recipe.summary)}</p>
     </div>
@@ -137,6 +267,7 @@ function card(recipe) {
 function recipeView(recipe) {
   const shareText = `${recipe.title} from Lisa's Recipe Book`;
   const link = recipeLink(recipe);
+  const kept = recipe.world ? state.recipes.find((item) => item.sourceUrl === recipe.sourceUrl) : null;
   return shell(`
     <article class="recipe">
       <div>
@@ -150,13 +281,14 @@ function recipeView(recipe) {
         </div>
       </div>
       <div>
-        <p class="kicker">${esc(recipe.cuisine)} · ${esc(recipe.category)}${recipe.family ? `<span class="badge">Tex's kitchen</span>` : ""}</p>
+        <p class="kicker">${recipe.world ? "Library" : esc(cuisineLabel(recipe.cuisine))} · ${esc(recipe.category)}${recipe.family ? `<span class="badge">Tex's kitchen</span>` : ""}</p>
         <h2 class="page-title" style="font-size:clamp(36px,5vw,58px)">${esc(recipe.title)}</h2>
         <p>${esc(recipe.summary)}</p>
         <div class="meta">
           <span>Serves ${esc(recipe.yieldText)}</span>
-          <span>Prep ${clock(recipe.prepMinutes)}</span>
-          <span>Cook ${clock(recipe.cookMinutes)}</span>
+          ${recipe.prepMinutes ? `<span>Prep ${clock(recipe.prepMinutes)}</span>` : ""}
+          ${recipe.cookMinutes ? `<span>Cook ${clock(recipe.cookMinutes)}</span>` : ""}
+          ${recipe.area ? `<span>${esc(recipe.area)}</span>` : ""}
         </div>
         <div class="actions no-print">
           <button class="btn" data-action="print">Print</button>
@@ -164,12 +296,21 @@ function recipeView(recipe) {
           <button class="btn quiet" data-action="copy" data-text="${esc(`${shareText}\n${link}`)}">Copy link</button>
           <a class="btn quiet" href="sms:?&body=${encodeURIComponent(`${shareText} ${link}`)}">Text</a>
           <a class="btn quiet" href="mailto:?subject=${encodeURIComponent(recipe.title)}&body=${encodeURIComponent(`${recipe.summary}\n\n${link}`)}">Email</a>
-          ${state.user ? `<a class="btn quiet" href="#/edit/${recipe.id}">Edit</a><button class="btn danger" data-action="delete-recipe" data-id="${recipe.id}">Delete</button>` : `<a class="btn quiet" href="#/account">Sign in to edit</a>`}
+          ${recipe.youtube ? `<a class="btn quiet" href="${esc(recipe.youtube)}" target="_blank" rel="noopener">Watch on YouTube</a>` : ""}
+          ${recipe.world
+            ? (kept
+              ? `<a class="btn" href="#/recipe/${kept.id}">Open in your book</a>`
+              : (state.user
+                ? `<button class="btn" data-action="keep-recipe" data-id="${esc(recipe.mealId)}">Keep in the book</button>`
+                : `<a class="btn" href="#/account">Log in to keep this</a>`))
+            : (state.user
+              ? `<a class="btn quiet" href="#/edit/${recipe.id}">Edit</a><button class="btn danger" data-action="delete-recipe" data-id="${recipe.id}">Delete</button>`
+              : `<a class="btn quiet" href="#/account">Log in to edit</a>`)}
         </div>
         <div class="share-box no-print timer">
           <strong id="timer-readout">${timerText()}</strong>
           <input id="timer-min" type="number" min="1" max="240" placeholder="Min" style="width:80px">
-          <button class="btn moss" data-action="timer-start">Start</button>
+          <button class="btn moss" data-action="timer-start">${timer.running ? "Pause" : "Start"}</button>
           <button class="btn quiet" data-action="timer-reset">Reset</button>
         </div>
         <h3>Ingredients</h3>
@@ -178,7 +319,7 @@ function recipeView(recipe) {
         <ol>${recipe.steps.map((item) => `<li>${esc(item)}</li>`).join("")}</ol>
         ${recipe.notes ? `<h3>Notes</h3><p>${esc(recipe.notes)}</p>` : ""}
         ${recipe.sourceUrl ? `<p class="no-print"><button class="btn-line" data-action="open-source" data-url="${esc(recipe.sourceUrl)}" data-title="${esc(recipe.sourceTitle || "Source")}">Open “${esc(recipe.sourceTitle || "source")}” in the book</button></p>` : ""}
-        ${state.user ? `<form class="no-print" id="media-form">
+        ${state.user && !recipe.world ? `<form class="no-print" id="media-form">
           <div class="field"><label>Add a picture or video<input type="file" name="file" accept="image/*,video/mp4,video/webm" required></label></div>
           <button class="btn moss" type="submit">Add to this recipe</button>
         </form>` : ""}
@@ -194,7 +335,7 @@ function editor(recipe) {
     <form id="recipe-form" class="panel">
       <div class="field"><label>Title<input name="title" required value="${esc(value.title)}"></label></div>
       <div class="split">
-        <div class="field"><label>Table<select name="cuisine"><option value="texas" ${value.cuisine === "texas" ? "selected" : ""}>Texas</option><option value="cajun" ${value.cuisine === "cajun" ? "selected" : ""}>Cajun</option></select></label></div>
+        <div class="field"><label>Table<select name="cuisine">${[["texas", "Texas"], ["cajun", "Cajun"], ["library", "Library"]].map(([id, label]) => `<option value="${id}" ${value.cuisine === id ? "selected" : ""}>${label}</option>`).join("")}</select></label></div>
         <div class="field"><label>Kind<select name="category">${["Mains", "Sides", "Breakfast", "Sweets", "Drinks"].map((item) => `<option ${value.category === item ? "selected" : ""}>${item}</option>`).join("")}</select></label></div>
       </div>
       <div class="field"><label>A short introduction<textarea name="summary">${esc(value.summary)}</textarea></label></div>
@@ -215,28 +356,112 @@ function editor(recipe) {
   `);
 }
 
-function notesView() {
-  if (!state.user) return accountGate("The notepad keeps your own pages in this book.");
-  const selected = state.notes.find((note) => String(note.id) === String(state.noteId)) || state.notes[0];
+function libraryView() {
   return shell(`
-    <h2 class="page-title">Notepad</h2>
-    <div class="layout">
-      <aside class="stack">
-        <button class="btn" data-action="new-note">New note</button>
-        ${state.notes.map((note) => `<button class="btn quiet" data-action="pick-note" data-id="${note.id}">${esc(note.title)}</button>`).join("") || `<p class="empty">No notes yet.</p>`}
-      </aside>
-      <form id="note-form" class="panel">
-        <input type="hidden" name="id" value="${selected ? esc(selected.id) : ""}">
-        <div class="field"><label>Title<input name="title" value="${esc(selected?.title || "")}"></label></div>
-        <div class="field"><label>Note<textarea name="body" style="min-height:280px">${esc(selected?.body || "")}</textarea></label></div>
-        <div class="actions"><button class="btn moss" type="submit">Save note</button>${selected ? `<button class="btn danger" type="button" data-action="delete-note" data-id="${selected.id}">Delete</button>` : ""}</div>
+    <section class="hero">
+      <div class="hero-copy">
+        <p class="eyebrow">TheMealDB</p>
+        <h2 class="page-title">The open library.</h2>
+        <p>Hundreds of recipes from the open library, ready to print, share, and keep next to the Cajun and Texas plates.</p>
+      </div>
+    </section>
+    <form id="shelf-form" class="toolbar">
+      <input id="shelf-q" name="q" placeholder="Search the library" value="${esc(state.shelfQ)}">
+      <button class="btn" type="submit">Search</button>
+      <span class="empty">${state.shelfLoading ? "Looking…" : `${state.shelf.length} plates`}</span>
+    </form>
+    <div class="toolbar">
+      ${state.shelfCategories.map((item) => `<button type="button" class="chip ${!state.shelfQ && state.shelfCategory === item ? "active" : ""}" data-shelf="${esc(item)}">${esc(item)}</button>`).join("")}
+    </div>
+    ${state.shelfError ? `<p class="empty">${esc(state.shelfError)}</p>` : ""}
+    <section class="grid">
+      ${state.shelf.map(worldCard).join("") || (state.shelfLoading ? "" : `<p class="empty">Nothing matches that search.</p>`)}
+    </section>
+  `);
+}
+
+function notesView() {
+  if (!state.user) return accountGate("Log in to open your notepad.");
+  const picks = state.noteFiles.map((item) => `<div class="pick">
+    ${item.kind === "image" ? `<img src="${esc(item.url)}" alt="">` : item.kind === "video" ? `<video src="${esc(item.url)}" muted></video>` : `<span class="file-chip">${esc(item.name)}</span>`}
+    <button type="button" class="pick-x" data-action="drop-file" data-id="${esc(item.id)}" aria-label="Remove ${esc(item.name)}">×</button>
+  </div>`).join("");
+  return shell(`
+    <div class="feed">
+      <p class="kicker">Notepad</p>
+      <form id="note-form" class="composer">
+        <div class="composer-row">
+          ${face(state.user)}
+          <textarea id="note-body" name="body" rows="3" placeholder="Write a note…">${esc(state.noteDraft)}</textarea>
+        </div>
+        ${picks ? `<div class="picks">${picks}</div>` : ""}
+        <div class="composer-tools">
+          ${state.editingNote ? "" : `<button class="tool" type="button" data-action="note-pick" data-kind="image">${iconPhoto()}<span>Photo</span></button>
+          <button class="tool" type="button" data-action="note-pick" data-kind="video">${iconVideo()}<span>Video</span></button>
+          <button class="tool" type="button" data-action="note-pick" data-kind="file">${iconFile()}<span>File</span></button>`}
+          ${state.editingNote ? `<button class="btn quiet" type="button" data-action="cancel-note">Cancel</button>` : ""}
+          <button class="btn" type="submit">${state.editingNote ? "Save" : "Post"}</button>
+        </div>
+        <input id="note-pick-image" data-note-pick="image" type="file" accept="image/*" multiple hidden>
+        <input id="note-pick-video" data-note-pick="video" type="file" accept="video/mp4,video/webm,video/quicktime" hidden>
+        <input id="note-pick-file" data-note-pick="file" type="file" accept="application/pdf,text/plain,.pdf,.txt" multiple hidden>
       </form>
+      ${state.notes.map(notePost).join("") || `<p class="empty composer-empty">Your notes will show up here.</p>`}
     </div>
   `);
 }
 
+function face(user) {
+  if (user?.avatar) return `<img class="face" src="${esc(asset(user.avatar))}" alt="">`;
+  return `<span class="face-ph">${esc((user?.name || "L").trim().slice(0, 1) || "L")}</span>`;
+}
+
+function iconPhoto() {
+  return `<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M5 5.5A2.5 2.5 0 0 1 7.5 3h9A2.5 2.5 0 0 1 19 5.5v13a2.5 2.5 0 0 1-2.5 2.5h-9A2.5 2.5 0 0 1 5 18.5v-13Zm2.1 10.7 2.4-3a.8.8 0 0 1 1.25 0l1.4 1.7 1.15-1.4a.8.8 0 0 1 1.24 0l2.15 2.6V5.5a.5.5 0 0 0-.5-.5h-9a.5.5 0 0 0-.5.5v10.7Zm1.5-6.4a1.35 1.35 0 1 0 0-2.7 1.35 1.35 0 0 0 0 2.7Z"/></svg>`;
+}
+
+function iconVideo() {
+  return `<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M4 7.2A2.2 2.2 0 0 1 6.2 5h7.1A2.2 2.2 0 0 1 15.5 7.2v9.6a2.2 2.2 0 0 1-2.2 2.2H6.2A2.2 2.2 0 0 1 4 16.8V7.2Zm13.2 1.7 2.2-1.4A1 1 0 0 1 21 8.4v7.2a1 1 0 0 1-1.6.8l-2.2-1.4V8.9Z"/></svg>`;
+}
+
+function iconFile() {
+  return `<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M7 3.5h6.2L19 9.2V19a1.5 1.5 0 0 1-1.5 1.5h-10A1.5 1.5 0 0 1 6 19V5a1.5 1.5 0 0 1 1-1.5Zm5.5 1.6V9h4.1l-4.1-3.9ZM8.2 12.2h7.6v1.4H8.2v-1.4Zm0 3h5.4v1.4H8.2v-1.4Z"/></svg>`;
+}
+
+function notePost(note) {
+  const files = Array.isArray(note.attachments) ? note.attachments : [];
+  const visual = files.filter((item) => item.kind === "image" || item.kind === "video");
+  const docs = files.filter((item) => item.kind === "file");
+  const media = visual.map((item) => item.kind === "video"
+    ? `<video src="${esc(asset(item.path))}" controls playsinline></video>`
+    : `<img src="${esc(asset(item.path))}" alt="">`).join("");
+  const chips = docs.map((item) => `<a class="file-chip" href="${esc(asset(item.path))}" download="${esc(item.name || "file")}">${iconFile()}<span>${esc(item.name || "File")}</span></a>`).join("");
+  return `<article class="post">
+    <header>
+      ${face(state.user)}
+      <div>
+        <strong>${esc(state.user?.name || "Lisa")}</strong>
+        <time>${esc(when(note.updatedAt))}</time>
+      </div>
+      <div class="post-tools">
+        <button class="btn quiet" type="button" data-action="edit-note" data-id="${esc(note.id)}">Edit</button>
+        <button class="btn danger" type="button" data-action="delete-note" data-id="${esc(note.id)}">Delete</button>
+      </div>
+    </header>
+    ${note.body ? `<p>${esc(note.body)}</p>` : ""}
+    ${media ? `<div class="post-media ${visual.length > 1 ? "many" : "one"}">${media}</div>` : ""}
+    ${chips ? `<div class="file-row">${chips}</div>` : ""}
+  </article>`;
+}
+
+function when(iso) {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+}
+
 function studio() {
-  if (!state.user) return accountGate("The studio is where films and saved posts live.");
+  if (!state.user) return accountGate("Log in to save films and links.");
   const saved = state.library.filter((item) => item.kind !== "film");
   const films = state.library.filter((item) => item.kind === "film");
   return shell(`
@@ -291,7 +516,7 @@ function libraryCard(item) {
 }
 
 function profile() {
-  if (!state.user) return accountGate("A profile holds your name, portrait, and the book you keep.");
+  if (!state.user) return accountGate("Log in to see your name and picture.");
   const user = state.user;
   return shell(`
     <h2 class="page-title">Profile</h2>
@@ -310,34 +535,36 @@ function profile() {
         <div class="field"><label>Or upload a portrait<input type="file" name="avatar" accept="image/*" required></label></div>
         <button class="btn moss" type="submit">Upload portrait</button>
       </form>
-      <button class="btn quiet" data-action="sign-out">Sign out</button>
+      <button class="btn quiet" type="button" data-action="sign-out">Log out</button>
     </section>
   `);
 }
 
 function accountGate(copy) {
   return shell(`
-    <section class="hero">
-      <div class="hero-copy"><h2 class="page-title" style="color:#fffaf4">Your profile</h2><p>${esc(copy)}</p></div>
-    </section>
+    <h2 class="page-title">Log in</h2>
+    <p>${esc(copy)}</p>
     ${accountForms()}
   `);
 }
 
 function accountForms() {
   return `<div class="split">
-    <form id="register-form" class="panel">
-      <h3>Create the profile</h3>
-      <div class="field"><label>Name<input name="name" value="Lisa Miller" required></label></div>
-      <div class="field"><label>Email<input name="email" type="email" required></label></div>
-      <div class="field"><label>Password<input name="password" type="password" minlength="8" required></label></div>
-      <button class="btn" type="submit">Create profile</button>
-    </form>
     <form id="login-form" class="panel">
-      <h3>Welcome back</h3>
-      <div class="field"><label>Email<input name="email" type="email" required></label></div>
-      <div class="field"><label>Password<input name="password" type="password" required></label></div>
-      <button class="btn moss" type="submit">Sign in</button>
+      <h3>Log in</h3>
+      <p class="empty">Use the email and password for this book.</p>
+      <div class="field"><label>Email<input name="email" type="email" required autocomplete="username"></label></div>
+      <div class="field"><label>Password<span class="password-row"><input name="password" type="password" required autocomplete="current-password"><button class="btn quiet" type="button" data-action="toggle-password">Show password</button></span></label></div>
+      <button class="btn" type="submit">Log in</button>
+    </form>
+    <form id="register-form" class="panel">
+      <h3>First time here?</h3>
+      <p class="empty">Create an account. You only do this once.</p>
+      <div class="field"><label>Name<input name="name" value="Lisa Miller" required autocomplete="name"></label></div>
+      <div class="field"><label>Email<input name="email" type="email" required autocomplete="email"></label></div>
+      <div class="field"><label>Password<span class="password-row"><input name="password" type="password" minlength="8" required autocomplete="new-password"><button class="btn quiet" type="button" data-action="toggle-password">Show password</button></span></label></div>
+      <p class="empty">Use at least 8 characters.</p>
+      <button class="btn moss" type="submit">Create account</button>
     </form>
   </div>`;
 }
@@ -366,10 +593,26 @@ function render() {
     const recipe = state.recipes.find((item) => item.id === current.id);
     document.title = recipe ? `${recipe.title} · Lisa's Recipe Book` : "Lisa's Recipe Book";
     html = recipe ? recipeView(recipe) : shell(`<p>That recipe is not in the book.</p>`);
+  } else if (current.name === "world") {
+    const recipe = state.worldCache[current.id];
+    document.title = recipe ? `${recipe.title} · Lisa's Recipe Book` : "Library · Lisa's Recipe Book";
+    if (recipe) html = recipeView(recipe);
+    else if (state.worldError && state.worldMiss === current.id && !state.worldLoading) {
+      html = shell(`<p class="empty">${esc(state.worldError)}</p><button class="btn" data-action="retry-world">Try again</button>`);
+    } else {
+      html = shell(`<p class="empty">Opening that plate…</p>`);
+      if (state.worldMiss !== current.id) {
+        state.worldMiss = current.id;
+        ensureWorld(current.id);
+      }
+    }
+  } else if (current.name === "library") {
+    document.title = "Library · Lisa's Recipe Book";
+    html = libraryView();
   } else if (current.name === "edit" || current.name === "new") {
     document.title = "Write a recipe · Lisa's Recipe Book";
     const recipe = current.name === "edit" ? state.recipes.find((item) => item.id === current.id) : null;
-    html = state.user ? editor(recipe) : accountGate("Sign in before writing in the book.");
+    html = state.user ? editor(recipe) : accountGate("Log in before you add a recipe.");
   } else if (current.name === "notes") {
     document.title = "Notepad · Lisa's Recipe Book";
     html = notesView();
@@ -377,8 +620,8 @@ function render() {
     document.title = "Studio · Lisa's Recipe Book";
     html = studio();
   } else if (current.name === "profile" || current.name === "account") {
-    document.title = "Profile · Lisa's Recipe Book";
-    html = current.name === "profile" ? profile() : accountGate("Create a profile to keep notes, pictures, and films.");
+    document.title = current.name === "account" ? "Log in · Lisa's Recipe Book" : "Profile · Lisa's Recipe Book";
+    html = current.name === "profile" ? profile() : accountGate("Log in with your email and password. First time here? Create an account in the next box.");
   } else {
     document.title = "Lisa's Recipe Book";
     html = home();
@@ -386,6 +629,7 @@ function render() {
   root.innerHTML = html;
   const preview = document.getElementById("live-preview");
   if (preview && state.recording?.stream) preview.srcObject = state.recording.stream;
+  paintInstall();
 }
 
 async function openSource(url, title, from) {
@@ -424,9 +668,16 @@ document.addEventListener("click", async (event) => {
     if (href && href.startsWith("http")) await openSource(href, link.textContent);
     return;
   }
-  const button = event.target.closest("[data-action], [data-cuisine]");
+  const button = event.target.closest("[data-action], [data-cuisine], [data-shelf]");
   if (!button) return;
   if (button.dataset.cuisine) { state.cuisine = button.dataset.cuisine; render(); return; }
+  if (button.dataset.shelf) {
+    state.shelfCategory = button.dataset.shelf;
+    state.shelfQ = "";
+    state.shelfFocus = false;
+    await loadShelf();
+    return;
+  }
   const action = button.dataset.action;
   try {
     if (action === "print") window.print();
@@ -436,20 +687,17 @@ document.addEventListener("click", async (event) => {
       if (navigator.share) await navigator.share(payload);
       else { await navigator.clipboard.writeText(`${payload.text}\n${payload.url}`); say("Copied, ready to send."); }
     }
-    if (action === "timer-start") {
-      const input = document.getElementById("timer-min");
-      if (!timer.handle && timer.seconds === 0) timer.seconds = Math.max(0, Number(input.value) || 0) * 60;
-      if (!timer.seconds) return;
-      if (timer.handle) { clearInterval(timer.handle); timer.handle = null; button.textContent = "Start"; return; }
-      button.textContent = "Pause";
-      timer.handle = setInterval(() => {
-        timer.seconds -= 1;
-        const readout = document.getElementById("timer-readout");
-        if (readout) readout.textContent = timerText();
-        if (timer.seconds <= 0) { clearInterval(timer.handle); timer.handle = null; say("The timer is up."); }
-      }, 1000);
+    if (action === "timer-start") startTimer(document.getElementById("timer-min")?.value);
+    if (action === "timer-reset") resetTimer();
+    if (action === "install-app") await installApp();
+    if (action === "toggle-password") {
+      const input = button.parentElement?.querySelector("input");
+      if (!input) return;
+      const showing = input.type === "text";
+      input.type = showing ? "password" : "text";
+      button.textContent = showing ? "Show password" : "Hide password";
     }
-    if (action === "timer-reset") { clearInterval(timer.handle); timer.handle = null; timer.seconds = 0; render(); }
+    if (action === "dismiss-install") { localStorage.setItem("lisa-install-hide", "1"); state.showInstall = ""; render(); }
     if (action === "open-source") {
       const current = state.recipes.find((item) => item.id === route().id);
       await openSource(button.dataset.url, button.dataset.title, current);
@@ -469,12 +717,19 @@ document.addEventListener("click", async (event) => {
       const data = await api(`/api/recipes/${button.dataset.id}/media/${button.dataset.media}`, { method: "DELETE" });
       replaceRecipe(data.recipe);
     }
-    if (action === "new-note") { state.noteId = ""; state.notes = [{ id: "", title: "New note", body: "" }, ...state.notes.filter((note) => note.id)]; render(); }
-    if (action === "pick-note") { state.noteId = button.dataset.id; render(); }
-    if (action === "delete-note") {
+    if (action === "delete-note" && confirm("Remove this note?")) {
       await api(`/api/notes/${button.dataset.id}`, { method: "DELETE" });
-      state.noteId = "";
       await refreshPrivate();
+      say("Note removed.");
+      render();
+    }
+    if (action === "note-pick") document.getElementById(`note-pick-${button.dataset.kind}`)?.click();
+    if (action === "drop-file") {
+      const gone = state.noteFiles.find((item) => item.id === button.dataset.id);
+      if (gone) URL.revokeObjectURL(gone.url);
+      state.noteFiles = state.noteFiles.filter((item) => item.id !== button.dataset.id);
+      const box = document.getElementById("note-body");
+      if (box) state.noteDraft = box.value;
       render();
     }
     if (action === "delete-library") {
@@ -482,6 +737,13 @@ document.addEventListener("click", async (event) => {
       await refreshPrivate();
       render();
     }
+    if (action === "keep-recipe") {
+      const data = await api(`/api/world/${button.dataset.id}/keep`, { method: "POST" });
+      replaceRecipe(data.recipe);
+      say("Kept in the book.");
+      go(`#/recipe/${data.recipe.id}`);
+    }
+    if (action === "retry-world") { state.worldMiss = ""; state.worldError = ""; render(); }
     if (action === "sign-out") { localStorage.removeItem("lisa-token"); state.user = null; go("#/"); }
     if (action === "record") await toggleRecord();
   } catch (error) {
@@ -490,12 +752,50 @@ document.addEventListener("click", async (event) => {
 });
 
 document.addEventListener("input", (event) => {
-  if (event.target.id !== "q") return;
-  state.q = event.target.value;
-  const caret = event.target.selectionStart;
-  render();
-  const field = document.getElementById("q");
-  if (field) { field.focus(); field.setSelectionRange(caret, caret); }
+  if (event.target.id === "q") {
+    state.q = event.target.value;
+    const caret = event.target.selectionStart;
+    render();
+    const field = document.getElementById("q");
+    if (field) { field.focus(); field.setSelectionRange(caret, caret); }
+  }
+  if (event.target.id === "note-body") state.noteDraft = event.target.value;
+  if (event.target.id === "shelf-q") {
+    state.shelfQ = event.target.value;
+    state.shelfFocus = true;
+    state.shelfCaret = event.target.selectionStart;
+    clearTimeout(state.shelfTimer);
+    state.shelfTimer = setTimeout(() => { loadShelf(); }, 400);
+  }
+});
+
+document.addEventListener("change", async (event) => {
+  const input = event.target;
+  if (!(input instanceof HTMLInputElement) || !input.dataset.notePick) return;
+  const box = document.getElementById("note-body");
+  if (box) state.noteDraft = box.value;
+  const incoming = [...input.files];
+  input.value = "";
+  let warned = "";
+  for (const file of incoming) {
+    if (state.noteFiles.length >= 6) { warned = "Six files is the limit for one note."; break; }
+    const kind = file.type.startsWith("image/") ? "image" : file.type.startsWith("video/") ? "video" : "file";
+    if (kind !== "image" && file.size > 1_200_000) {
+      warned = kind === "video" ? "That video is too big to keep. Try a short clip." : "That file is too large.";
+      continue;
+    }
+    const stored = kind === "image" ? await shrinkImage(file) : file;
+    if (stored.size > 1_500_000) { warned = "That picture is still too large."; continue; }
+    state.noteFiles.push({
+      id: crypto.randomUUID(),
+      file: stored,
+      url: URL.createObjectURL(stored),
+      kind,
+      name: file.name || "File"
+    });
+  }
+  if (warned) say(warned);
+  else render();
 });
 
 document.addEventListener("submit", async (event) => {
@@ -519,11 +819,19 @@ document.addEventListener("submit", async (event) => {
       render();
     }
     if (form.id === "avatar-form") {
-      const body = new FormData(form);
+      const body = new FormData();
+      const picture = await shrinkImage(new FormData(form).get("avatar"));
+      body.set("avatar", picture);
       const result = await api("/api/auth/avatar", { method: "POST", body });
       state.user = result.user;
       say("Portrait saved.");
       render();
+    }
+    if (form.id === "shelf-form") {
+      state.shelfQ = String(data.q || "");
+      state.shelfFocus = true;
+      clearTimeout(state.shelfTimer);
+      await loadShelf();
     }
     if (form.id === "recipe-form") {
       const editing = route().name === "edit";
@@ -532,22 +840,29 @@ document.addEventListener("submit", async (event) => {
       go(`#/recipe/${result.recipe.id}`);
     }
     if (form.id === "media-form") {
-      const body = new FormData(form);
-      const file = body.get("file");
-      const kind = file?.type?.startsWith("video/") ? "video" : "image";
+      const incoming = new FormData(form);
+      const picture = await shrinkImage(incoming.get("file"));
+      const body = new FormData();
+      body.set("file", picture);
+      const kind = picture?.type?.startsWith("video/") ? "video" : "image";
       const role = kind === "image" && !state.recipes.find((item) => item.id === route().id)?.image ? "cover" : "gallery";
       const result = await api(`/api/recipes/${route().id}/media?kind=${kind}&role=${role}`, { method: "POST", body });
       replaceRecipe(result.recipe);
+      say("Picture saved.");
       render();
     }
     if (form.id === "note-form") {
-      if (data.id) await api(`/api/notes/${data.id}`, { method: "PATCH", json: data });
-      else {
-        const created = await api("/api/notes", { method: "POST", json: data });
-        state.noteId = created.note.id;
-      }
+      const text = String(data.body || "").trim();
+      if (!text && !state.noteFiles.length) throw new Error("Write a note, or add a picture.");
+      const body = new FormData();
+      body.set("body", text);
+      state.noteFiles.forEach((item) => body.append("file", item.file, item.name || "file"));
+      await api("/api/notes", { method: "POST", body });
+      state.noteFiles.forEach((item) => URL.revokeObjectURL(item.url));
+      state.noteFiles = [];
+      state.noteDraft = "";
       await refreshPrivate();
-      say("Note saved.");
+      say("Posted.");
       render();
     }
     if (form.id === "link-form") {
@@ -570,6 +885,47 @@ document.addEventListener("submit", async (event) => {
     say(error.message);
   }
 });
+
+async function loadShelf() {
+  const seq = ++state.shelfSeq;
+  state.shelfLoading = true;
+  try {
+    const params = new URLSearchParams();
+    if (state.shelfQ) params.set("q", state.shelfQ);
+    else if (state.shelfCategory) params.set("category", state.shelfCategory);
+    const data = await api(`/api/world?${params}`);
+    if (seq !== state.shelfSeq) return;
+    state.shelf = data.meals;
+    state.shelfCategories = data.categories;
+    if (!state.shelfQ) state.shelfCategory = data.category || state.shelfCategory;
+    if (!state.featured.length && !state.shelfQ) state.featured = data.meals.slice(0, 6);
+    state.shelfError = "";
+  } catch (error) {
+    if (seq !== state.shelfSeq) return;
+    state.shelfError = error.message;
+  }
+  state.shelfLoading = false;
+  render();
+  const field = document.getElementById("shelf-q");
+  if (field && state.shelfFocus) {
+    field.focus();
+    const pos = state.shelfCaret ?? field.value.length;
+    field.setSelectionRange(pos, pos);
+  }
+}
+
+async function ensureWorld(id) {
+  state.worldLoading = true;
+  state.worldError = "";
+  try {
+    const data = await api(`/api/world/${id}`);
+    state.worldCache[id] = data.recipe;
+  } catch (error) {
+    state.worldError = error.message;
+  }
+  state.worldLoading = false;
+  if (route().name === "world" && route().id === id) render();
+}
 
 function replaceRecipe(recipe) {
   const index = state.recipes.findIndex((item) => item.id === recipe.id);
@@ -601,11 +957,256 @@ async function toggleRecord() {
 
 window.addEventListener("hashchange", () => { state.reader = null; render(); });
 
+function saveTimer() {
+  localStorage.setItem("lisa-timer", JSON.stringify({
+    endAt: timer.running ? timer.endAt : 0,
+    pausedRemaining: timer.running ? 0 : timer.pausedRemaining,
+    alerted: timer.alerted
+  }));
+}
+
+function paintTimer() {
+  const readout = document.getElementById("timer-readout");
+  if (readout) readout.textContent = timerText();
+  const button = document.querySelector("[data-action='timer-start']");
+  if (button) button.textContent = timer.running ? "Pause" : "Start";
+}
+
+function stopTicker() {
+  if (timer.handle) clearInterval(timer.handle);
+  timer.handle = null;
+}
+
+function startTicker() {
+  stopTicker();
+  timer.handle = setInterval(tickTimer, 250);
+}
+
+async function holdScreen() {
+  try {
+    if (document.visibilityState !== "visible" || !timer.running || !navigator.wakeLock) return;
+    wakeLock = await navigator.wakeLock.request("screen");
+  } catch { /* a locked phone releases this on its own */ }
+}
+
+function releaseScreen() {
+  wakeLock?.release?.().catch(() => {});
+  wakeLock = null;
+}
+
+async function scheduleTimerAlert(endAt) {
+  if (!("Notification" in window) || !navigator.serviceWorker) return;
+  if (Notification.permission === "default") {
+    try { await Notification.requestPermission(); } catch { return; }
+  }
+  if (Notification.permission !== "granted") return;
+  const registration = await navigator.serviceWorker.ready;
+  const pending = await registration.getNotifications({ tag: "lisa-timer" }).catch(() => []);
+  pending.forEach((note) => note.close());
+  if ("TimestampTrigger" in window) {
+    try {
+      await registration.showNotification("Lisa's Recipe Book", {
+        body: "The timer is up.",
+        tag: "lisa-timer",
+        showTrigger: new TimestampTrigger(endAt)
+      });
+      return;
+    } catch { /* the service worker will watch the clock instead */ }
+  }
+  registration.active?.postMessage({ type: "timer-start", endAt });
+}
+
+function clearTimerAlert() {
+  navigator.serviceWorker?.ready.then((registration) => {
+    registration.active?.postMessage({ type: "timer-clear" });
+  }).catch(() => {});
+}
+
+function beep() {
+  try {
+    const context = new AudioContext();
+    const tone = (when, freq) => {
+      const osc = context.createOscillator();
+      const gain = context.createGain();
+      osc.frequency.value = freq;
+      osc.connect(gain);
+      gain.connect(context.destination);
+      gain.gain.setValueAtTime(0.0001, when);
+      gain.gain.exponentialRampToValueAtTime(0.2, when + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, when + 0.35);
+      osc.start(when);
+      osc.stop(when + 0.36);
+    };
+    const now = context.currentTime;
+    tone(now, 880);
+    tone(now + 0.4, 880);
+    tone(now + 0.8, 1175);
+  } catch { /* the written notice still shows */ }
+}
+
+function finishTimer() {
+  if (timer.alerted) return;
+  timer.alerted = true;
+  timer.running = false;
+  timer.endAt = 0;
+  timer.pausedRemaining = 0;
+  stopTicker();
+  releaseScreen();
+  localStorage.removeItem("lisa-timer");
+  beep();
+  say("The timer is up.");
+  if (navigator.serviceWorker && Notification.permission === "granted") {
+    navigator.serviceWorker.ready.then((registration) => {
+      registration.showNotification("Lisa's Recipe Book", {
+        body: "The timer is up.",
+        tag: "lisa-timer",
+        renotify: true
+      });
+    }).catch(() => {});
+  }
+}
+
+function tickTimer() {
+  if (!timer.running) return;
+  if (Date.now() >= timer.endAt) finishTimer();
+  else paintTimer();
+}
+
+function restoreTimer() {
+  try {
+    const saved = JSON.parse(localStorage.getItem("lisa-timer") || "null");
+    if (!saved) return;
+    if (saved.endAt && saved.endAt > Date.now()) {
+      timer.endAt = saved.endAt;
+      timer.running = true;
+      timer.alerted = false;
+      startTicker();
+      holdScreen();
+      scheduleTimerAlert(saved.endAt);
+      return;
+    }
+    if (saved.endAt && !saved.alerted) {
+      timer.endAt = saved.endAt;
+      finishTimer();
+      return;
+    }
+    timer.pausedRemaining = Number(saved.pausedRemaining) || 0;
+  } catch { /* a broken save just starts fresh */ }
+}
+
+function startTimer(minutesInput) {
+  if (timer.running) {
+    timer.pausedRemaining = remainingSeconds();
+    timer.running = false;
+    timer.endAt = 0;
+    stopTicker();
+    releaseScreen();
+    clearTimerAlert();
+    saveTimer();
+    paintTimer();
+    return;
+  }
+  const seconds = timer.pausedRemaining || Math.max(0, Number(minutesInput) || 0) * 60;
+  if (!seconds) return;
+  timer.alerted = false;
+  timer.pausedRemaining = 0;
+  timer.endAt = Date.now() + seconds * 1000;
+  timer.running = true;
+  saveTimer();
+  startTicker();
+  holdScreen();
+  scheduleTimerAlert(timer.endAt);
+  paintTimer();
+}
+
+function resetTimer() {
+  timer.running = false;
+  timer.endAt = 0;
+  timer.pausedRemaining = 0;
+  timer.alerted = false;
+  stopTicker();
+  releaseScreen();
+  clearTimerAlert();
+  localStorage.removeItem("lisa-timer");
+  render();
+}
+
+async function installApp() {
+  if (!deferredInstall) return;
+  deferredInstall.prompt();
+  const choice = await deferredInstall.userChoice.catch(() => null);
+  deferredInstall = null;
+  if (choice?.outcome === "accepted") localStorage.setItem("lisa-install-hide", "1");
+  state.showInstall = "";
+  render();
+}
+
+function offerInstall() {
+  if (installedAlready() || localStorage.getItem("lisa-install-hide")) return;
+  const ios = /iphone|ipad|ipod/i.test(navigator.userAgent);
+  const android = /android/i.test(navigator.userAgent);
+  if (ios) state.showInstall = "ios";
+  else if (deferredInstall) state.showInstall = "ready";
+  else if (android) state.showInstall = "help";
+  else state.showInstall = deferredInstall ? "ready" : "";
+}
+
+async function rememberIfInstalled() {
+  if (installedAlready()) {
+    localStorage.setItem("lisa-install-hide", "1");
+    state.showInstall = "";
+    return;
+  }
+  try {
+    const related = await navigator.getInstalledRelatedApps?.();
+    if (related?.length) {
+      localStorage.setItem("lisa-install-hide", "1");
+      state.showInstall = "";
+    }
+  } catch { /* the card can still be closed by hand */ }
+}
+
+window.addEventListener("beforeinstallprompt", (event) => {
+  event.preventDefault();
+  deferredInstall = event;
+  if (!localStorage.getItem("lisa-install-hide") && !installedAlready()) {
+    state.showInstall = "ready";
+    render();
+  }
+});
+
+window.addEventListener("appinstalled", () => {
+  localStorage.setItem("lisa-install-hide", "1");
+  state.showInstall = "";
+  deferredInstall = null;
+  render();
+});
+
+document.addEventListener("visibilitychange", () => {
+  if (installedAlready()) {
+    localStorage.setItem("lisa-install-hide", "1");
+    state.showInstall = "";
+    paintInstall();
+  }
+  if (document.visibilityState === "visible") {
+    tickTimer();
+    if (timer.running) holdScreen();
+  }
+});
+
+window.addEventListener("pageshow", () => tickTimer());
+
+if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});
+restoreTimer();
+await rememberIfInstalled();
+offerInstall();
+
 const boot = await api("/api/health").then(() => api("/api/recipes")).catch((error) => ({ error }));
 if (boot.error) {
   document.getElementById("app").innerHTML = `<p class="boot">${esc(boot.error)}</p>`;
 } else {
   state.recipes = boot.recipes;
+  loadShelf();
   try {
     const me = await api("/api/auth/me");
     state.user = me.user;
