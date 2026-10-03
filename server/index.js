@@ -7,6 +7,7 @@ import crypto from "node:crypto";
 import { db, seedIfEmpty, recipeRow } from "./db.js";
 import { browse, watchClip } from "./browse.js";
 import { worldCatalog, worldRecipe } from "./world.js";
+import { findCover } from "./cover.js";
 import { hashPassword, checkPassword, signToken, readToken, publicUser } from "./auth.js";
 import {
   addSignal, askHost, deskSnapshot, ensureDesk, getCall, listSignals, listThreads,
@@ -240,7 +241,7 @@ app.get("/api/recipes/:id", (req, res) => {
   res.json({ recipe });
 });
 
-app.post("/api/recipes", (req, res) => {
+app.post("/api/recipes", async (req, res) => {
   if (!requireUser(req, res)) return;
   const title = String(req.body.title || "").trim();
   const ingredients = Array.isArray(req.body.ingredients) ? req.body.ingredients : lines(req.body.ingredients);
@@ -248,6 +249,13 @@ app.post("/api/recipes", (req, res) => {
   if (title.length < 2 || !ingredients.length || !steps.length) {
     return res.status(400).json({ error: "A recipe needs a title, ingredients, and steps." });
   }
+  let image = String(req.body.image || "").trim();
+  let imageCredit = String(req.body.imageCredit || "").trim();
+  if (!image) {
+    image = await findCover(title);
+    if (image) imageCredit = "Wikimedia Commons";
+  }
+  if (!image) return res.status(400).json({ error: "Add a picture of this plate before saving it." });
   const now = new Date().toISOString();
   const id = slugify(title);
   db.prepare(`
@@ -255,7 +263,7 @@ app.post("/api/recipes", (req, res) => {
       id, title, cuisine, category, summary, yield_text, prep_minutes, cook_minutes,
       ingredients, steps, notes, image, image_credit, source_url, source_title, family,
       created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', '', ?, ?, 0, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
   `).run(
     id,
     title,
@@ -268,6 +276,8 @@ app.post("/api/recipes", (req, res) => {
     JSON.stringify(ingredients.map(String)),
     JSON.stringify(steps.map(String)),
     String(req.body.notes || "").slice(0, 2000),
+    image,
+    imageCredit,
     String(req.body.sourceUrl || "").slice(0, 500),
     String(req.body.sourceTitle || "").slice(0, 160),
     now,
@@ -648,6 +658,13 @@ app.post("/api/world/:id/keep", async (req, res) => {
     if (existing) {
       return res.json({ recipe: recipeRow(db.prepare("SELECT * FROM recipes WHERE id = ?").get(existing.id)) });
     }
+    let image = recipe.image || "";
+    let imageCredit = recipe.imageCredit || "";
+    if (!image) {
+      image = await findCover(recipe.title);
+      if (image) imageCredit = "Wikimedia Commons";
+    }
+    if (!image) return res.status(400).json({ error: "That plate needs a picture before it can be kept." });
     const now = new Date().toISOString();
     const id = slugify(recipe.title);
     db.prepare(`
@@ -665,8 +682,8 @@ app.post("/api/world/:id/keep", async (req, res) => {
       JSON.stringify(recipe.ingredients),
       JSON.stringify(recipe.steps),
       recipe.notes,
-      recipe.image,
-      recipe.imageCredit,
+      image,
+      imageCredit,
       recipe.sourceUrl,
       recipe.sourceTitle,
       now,

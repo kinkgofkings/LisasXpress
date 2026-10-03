@@ -1,4 +1,5 @@
 import { worldCatalog, worldRecipe } from "../../server/world.js";
+import { findCover, paintCover } from "../../server/cover.js";
 import { browse, watchClip } from "./browse.js";
 import {
   addSignal, askHost, d1Desk, deskSnapshot, ensureDesk, getCall, listSignals, listThreads,
@@ -446,6 +447,20 @@ async function createRecipe(request, env) {
   if (title.length < 2 || !ingredients.length || !steps.length) {
     return json({ error: "A recipe needs a title, ingredients, and steps." }, 400);
   }
+  let image = String(body.image || "").trim();
+  let imageCredit = String(body.imageCredit || "").trim();
+  if (!image) {
+    image = await findCover(title);
+    if (image) imageCredit = "Wikimedia Commons";
+  }
+  if (!image) {
+    const painted = await paintCover(env.AI, title);
+    if (painted) {
+      image = await storeChunked(env, "image/jpeg", painted, "cover.jpg");
+      imageCredit = "Photograph for Lisa's Recipe Book";
+    }
+  }
+  if (!image) return json({ error: "Add a picture of this plate before saving it." }, 400);
   const now = new Date().toISOString();
   const id = await slugify(env, title);
   await env.DB.prepare(`
@@ -453,7 +468,7 @@ async function createRecipe(request, env) {
       id, title, cuisine, category, summary, yield_text, prep_minutes, cook_minutes,
       ingredients, steps, notes, image, image_credit, source_url, source_title, family, author_id,
       created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', '', ?, ?, 0, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)
   `).bind(
     id,
     title,
@@ -466,6 +481,8 @@ async function createRecipe(request, env) {
     JSON.stringify(ingredients.map(String)),
     JSON.stringify(steps.map(String)),
     String(body.notes || "").slice(0, 2000),
+    image,
+    imageCredit,
     String(body.sourceUrl || "").slice(0, 500),
     String(body.sourceTitle || "").slice(0, 160),
     user.id,
@@ -1193,6 +1210,20 @@ async function worldKeep(request, env, mealId) {
     if (existing) {
       return savedRecipe(env, user, existing.id);
     }
+    let image = recipe.image || "";
+    let imageCredit = recipe.imageCredit || "";
+    if (!image) {
+      image = await findCover(recipe.title);
+      if (image) imageCredit = "Wikimedia Commons";
+    }
+    if (!image) {
+      const painted = await paintCover(env.AI, recipe.title);
+      if (painted) {
+        image = await storeChunked(env, "image/jpeg", painted, "cover.jpg");
+        imageCredit = "Photograph for Lisa's Recipe Book";
+      }
+    }
+    if (!image) return json({ error: "That plate needs a picture before it can be kept." }, 400);
     const now = new Date().toISOString();
     const id = await slugify(env, recipe.title);
     await env.DB.prepare(`
@@ -1204,7 +1235,7 @@ async function worldKeep(request, env, mealId) {
     `).bind(
       id, recipe.title, recipe.category, recipe.summary, recipe.yieldText,
       JSON.stringify(recipe.ingredients), JSON.stringify(recipe.steps), recipe.notes,
-      recipe.image, recipe.imageCredit, recipe.sourceUrl, recipe.sourceTitle, user.id, now, now
+      image, imageCredit, recipe.sourceUrl, recipe.sourceTitle, user.id, now, now
     ).run();
     return savedRecipe(env, user, id, 201);
   } catch (error) {
