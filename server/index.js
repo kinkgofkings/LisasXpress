@@ -8,6 +8,13 @@ import { db, seedIfEmpty, recipeRow } from "./db.js";
 import { browse, watchClip } from "./browse.js";
 import { worldCatalog, worldRecipe } from "./world.js";
 import { hashPassword, checkPassword, signToken, readToken, publicUser } from "./auth.js";
+import {
+  addSignal, askHost, deskSnapshot, ensureDesk, getCall, listSignals, listThreads,
+  placeCall, readThread, searchBook, sendMessage, setCall, sqliteDesk
+} from "./desk.js";
+
+const deskDb = sqliteDesk(db);
+await ensureDesk(deskDb);
 
 const app = express();
 const root = path.resolve("public");
@@ -620,6 +627,80 @@ app.get("/api/watch", async (req, res) => {
   } catch (error) {
     res.status(error.status || 502).json({ error: error.message || "That video could not be opened." });
   }
+});
+
+function deskUser(req, res) {
+  const user = userFrom(req);
+  if (!user) {
+    res.status(401).json({ error: "Log in first." });
+    return null;
+  }
+  return user;
+}
+
+function deskSend(res, work) {
+  return work.then((data) => res.json(data)).catch((error) => {
+    res.status(error.status || 500).json({ error: error.status ? error.message : "That did not work. Please try again." });
+  });
+}
+
+app.get("/api/desk", (req, res) => {
+  const user = deskUser(req, res);
+  if (!user) return;
+  deskSend(res, deskSnapshot(deskDb, user.id));
+});
+
+app.get("/api/messages", (req, res) => {
+  const user = deskUser(req, res);
+  if (!user) return;
+  if (req.query.with) deskSend(res, readThread(deskDb, user.id, req.query.with, req.query.after));
+  else deskSend(res, listThreads(deskDb, user.id));
+});
+
+app.post("/api/messages", (req, res) => {
+  const user = deskUser(req, res);
+  if (!user) return;
+  deskSend(res, sendMessage(deskDb, user.id, req.body || {}).then((message) => ({ message })));
+});
+
+app.post("/api/calls", (req, res) => {
+  const user = deskUser(req, res);
+  if (!user) return;
+  deskSend(res, placeCall(deskDb, user.id, req.body || {}));
+});
+
+app.get("/api/calls/:id/signals", (req, res) => {
+  const user = deskUser(req, res);
+  if (!user) return;
+  deskSend(res, listSignals(deskDb, user.id, req.params.id, req.query.after));
+});
+
+app.post("/api/calls/:id/signals", (req, res) => {
+  const user = deskUser(req, res);
+  if (!user) return;
+  deskSend(res, addSignal(deskDb, user.id, req.params.id, req.body?.payload));
+});
+
+app.get("/api/calls/:id", (req, res) => {
+  const user = deskUser(req, res);
+  if (!user) return;
+  deskSend(res, getCall(deskDb, user.id, req.params.id));
+});
+
+app.post("/api/calls/:id", (req, res) => {
+  const user = deskUser(req, res);
+  if (!user) return;
+  deskSend(res, setCall(deskDb, user.id, req.params.id, req.body || {}));
+});
+
+app.get("/api/search", (req, res) => {
+  const user = userFrom(req);
+  deskSend(res, searchBook(deskDb, user?.id || null, req.query.q));
+});
+
+app.post("/api/ask", (req, res) => {
+  const user = userFrom(req);
+  deskSend(res, askHost(deskDb, user?.id || null, req.body?.question, null));
 });
 
 app.get("/api/browse", async (req, res) => {

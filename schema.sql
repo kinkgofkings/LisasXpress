@@ -83,6 +83,37 @@ CREATE TABLE IF NOT EXISTS reactions (
   created_at TEXT NOT NULL,
   PRIMARY KEY (user_id, target_type, target_id, kind)
 );
+CREATE TABLE IF NOT EXISTS presence (
+  user_id INTEGER PRIMARY KEY,
+  last_seen TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS messages (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  sender_id INTEGER NOT NULL,
+  recipient_id INTEGER NOT NULL,
+  body TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  seen INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS messages_recipient ON messages (recipient_id, seen, id);
+CREATE TABLE IF NOT EXISTS calls (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  caller_id INTEGER NOT NULL,
+  callee_id INTEGER NOT NULL,
+  mode TEXT NOT NULL,
+  state TEXT NOT NULL,
+  offer TEXT NOT NULL DEFAULT '',
+  answer TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS call_signals (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  call_id INTEGER NOT NULL,
+  sender_id INTEGER NOT NULL,
+  payload TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS comments (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id INTEGER NOT NULL,

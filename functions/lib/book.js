@@ -1,5 +1,9 @@
 import { worldCatalog, worldRecipe } from "../../server/world.js";
 import { browse, watchClip } from "./browse.js";
+import {
+  addSignal, askHost, d1Desk, deskSnapshot, ensureDesk, getCall, listSignals, listThreads,
+  placeCall, readThread, searchBook, sendMessage, setCall
+} from "../../server/desk.js";
 
 function json(data, status = 200) {
   return Response.json(data, { status });
@@ -301,7 +305,62 @@ async function route(request, env, url, parts) {
   if (first === "browse" && method === "GET") return openBrowse(url);
   if (first === "watch" && method === "GET") return watchLink(url);
 
+  if (["desk", "messages", "calls", "search", "ask"].includes(first)) return deskRoute(request, env, method, first, second, third, url);
+
   return json({ error: "That page is not in the book." }, 404);
+}
+
+let deskReady = null;
+async function deskRoute(request, env, method, first, second, third, url) {
+  if (!deskReady) {
+    deskReady = ensureDesk(d1Desk(env.DB)).catch((error) => {
+      deskReady = null;
+      throw error;
+    });
+  }
+  await deskReady;
+  const db = d1Desk(env.DB);
+  const user = await userFrom(env, request);
+  const need = () => {
+    if (!user) throw Object.assign(new Error("Log in first."), { status: 401 });
+    return user;
+  };
+  try {
+    if (first === "desk" && method === "GET") return json(await deskSnapshot(db, need().id));
+    if (first === "messages" && !second && method === "GET") {
+      const withId = url.searchParams.get("with");
+      if (withId) return json(await readThread(db, need().id, withId, url.searchParams.get("after")));
+      return json(await listThreads(db, need().id));
+    }
+    if (first === "messages" && !second && method === "POST") {
+      const body = await readJson(request);
+      return json({ message: await sendMessage(db, need().id, body) });
+    }
+    if (first === "calls" && !second && method === "POST") {
+      const body = await readJson(request);
+      return json(await placeCall(db, need().id, body));
+    }
+    if (first === "calls" && second && third === "signals" && method === "GET") {
+      return json(await listSignals(db, need().id, second, url.searchParams.get("after")));
+    }
+    if (first === "calls" && second && third === "signals" && method === "POST") {
+      const body = await readJson(request);
+      return json(await addSignal(db, need().id, second, body.payload));
+    }
+    if (first === "calls" && second && !third && method === "GET") return json(await getCall(db, need().id, second));
+    if (first === "calls" && second && !third && method === "POST") {
+      const body = await readJson(request);
+      return json(await setCall(db, need().id, second, body));
+    }
+    if (first === "search" && method === "GET") return json(await searchBook(db, user?.id || null, url.searchParams.get("q")));
+    if (first === "ask" && method === "POST") {
+      const body = await readJson(request);
+      return json(await askHost(db, user?.id || null, body.question, env.AI));
+    }
+    return json({ error: "That page is not in the book." }, 404);
+  } catch (error) {
+    return json({ error: error.status ? error.message : "That did not work. Please try again." }, error.status || 500);
+  }
 }
 
 async function register(request, env) {

@@ -6,3 +6,6 @@ pages_build_output_dir = "public"
 binding = "DB"
 database_name = "lisas-recipe-book"
 database_id = "c4db9d95-dcdd-4ea8-b30a-02e61c2f76be"
+
+[ai]
+binding = "AI"

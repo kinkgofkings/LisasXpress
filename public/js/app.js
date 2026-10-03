@@ -1,3 +1,5 @@
+import { attachCallMedia, bindDesk, callLayer, deskAction, deskNavigated, deskSubmit, deskTick, linkTools, messagesView, pageLink, paintDeskBadge, searchView, warmRinger } from "./desk.js?v=22";
+
 const API = window.APP_CONFIG?.apiBase || "";
 const state = {
   user: null,
@@ -39,7 +41,23 @@ const state = {
   qCaret: 0,
   shelfNotice: "",
   menu: false,
-  menuFresh: false
+  menuFresh: false,
+  unread: 0,
+  incoming: null,
+  activeUsers: [],
+  shareDraft: null,
+  call: null,
+  threads: [],
+  threadListReady: "",
+  threadFor: "",
+  threadPerson: null,
+  threadMessages: [],
+  searchQ: "",
+  searchResult: null,
+  hostQ: "",
+  hostAnswer: null,
+  hostBusy: false,
+  ringingFor: ""
 };
 const timer = { endAt: 0, pausedRemaining: 0, running: false, handle: null, alerted: false };
 let deferredInstall = null;
@@ -190,6 +208,7 @@ function shell(main) {
     </header>
     <main class="wrap">${main}</main>
     ${appBar()}
+    ${callLayer()}
     ${state.menu ? superMenu() : ""}
     ${state.reader ? reader() : ""}
     ${state.toast ? `<div class="toast">${esc(state.toast)}</div>` : ""}
@@ -205,11 +224,12 @@ function sectionOn(id) {
 }
 
 function appBar() {
-  const menuOn = state.menu || ["family", "profile", "account", "privacy", "terms", "new", "edit"].includes(route().name);
+  const menuOn = state.menu || ["family", "profile", "account", "privacy", "terms", "new", "edit", "search"].includes(route().name);
   const item = (href, icon, label, on) => `<a class="appbar-item ${on ? "active" : ""}" href="${href}" ${on ? 'aria-current="page"' : ""}><i class="bi ${icon}" aria-hidden="true"></i><span>${label}</span></a>`;
   return `<nav class="appbar" aria-label="Sections">
     ${item("#/", "bi-book", "Book", sectionOn("home"))}
     ${item("#/library", "bi-collection", "Library", sectionOn("library"))}
+    <a class="appbar-item ${sectionOn("messages") ? "active" : ""}" href="#/messages" ${sectionOn("messages") ? 'aria-current="page"' : ""}><i class="bi bi-chat-dots" aria-hidden="true"></i><span>Messages</span><span class="ping" data-badge="messages" ${(state.unread || state.incoming) ? "" : "hidden"}></span></a>
     ${item("#/notes", "bi-journal-text", "Notepad", sectionOn("notes"))}
     ${item("#/studio", "bi-camera-reels", "Studio", sectionOn("studio"))}
     <button class="appbar-item ${menuOn ? "active" : ""}" type="button" data-action="toggle-menu" aria-expanded="${state.menu ? "true" : "false"}" aria-controls="super-menu">
@@ -252,6 +272,8 @@ function superMenu() {
       <p class="menu-label">The book</p>
       <div class="menu-list">
         ${menuLink("#/", "bi-book", "Book", sectionOn("home"))}
+        ${menuLink("#/messages", "bi-chat-dots", "Messages", sectionOn("messages"))}
+        ${menuLink("#/search", "bi-search", "Search", sectionOn("search"))}
         ${menuLink("#/library", "bi-collection", "Library", sectionOn("library"))}
         ${menuLink("#/notes", "bi-journal-text", "Notepad", sectionOn("notes"))}
         ${menuLink("#/studio", "bi-camera-reels", "Studio", sectionOn("studio"))}
@@ -285,6 +307,8 @@ function privacyView() {
       <p>We do not sell this information, and the book does not show ads. A portrait you paste from a link is loaded from that address. A YouTube film plays from YouTube, under YouTube's own rules.</p>
       <h3>Where it lives</h3>
       <p>The book is hosted on Cloudflare. Open Profile to change your name, your line about yourself, or your portrait. Log out when you are done on a shared phone. If you want an account taken off the book, ask the person who set it up.</p>
+      <h3>Messages and calls</h3>
+      <p>A message is seen by the two people in that conversation. A call rings the other phone until they answer, decline, or the ring ends. The book does not record the call. Active means that person has the book open.</p>
     </section>
   `);
 }
@@ -301,7 +325,7 @@ function termsView() {
       <h3>Films and outside pages</h3>
       <p>A saved YouTube link is a bookmark. The film still belongs to the person who made it. Recipe pages opened from another site stay with that site.</p>
       <h3>Keeping the table pleasant</h3>
-      <p>Notes and comments should be fit for the whole family, including Lisa. Something that does not belong in a family book can be taken down.</p>
+      <p>Notes, comments, and messages should be fit for the whole family, including Lisa. A call is for someone who can answer. Something that does not belong in a family book can be taken down.</p>
     </section>
   `);
 }
@@ -447,22 +471,24 @@ function worldCard(meal) {
         <p>From the open library.</p>
       </div>
     </a>
-    <div class="card-actions">${add}${reactBar("world", `mealdb-${mealId}`, meal.social, false)}</div>
+    <div class="card-actions">${add}${linkTools(pageLink(`#/world/${mealId}`), meal.title)}${reactBar("world", `mealdb-${mealId}`, meal.social, false)}</div>
   </article>`;
 }
 
 function card(recipe) {
   const target = reactionTarget(recipe);
-  return `<a class="card" href="#/recipe/${recipe.id}">
-    ${recipe.image ? `<img src="${esc(asset(recipe.image))}" alt="${esc(recipe.title)}">` : `<div class="ph"></div>`}
-    <div>
-      <div class="kicker">${esc(cuisineLabel(recipe.cuisine))} · ${esc(recipe.category)}${recipe.family ? `<span class="badge">Tex's kitchen</span>` : ""}</div>
-      <h2>${esc(recipe.title)}</h2>
-      <p>${esc(recipe.summary)}</p>
-      ${recipe.author ? `<p class="empty">From ${esc(recipe.author.name)}</p>` : ""}
-      ${reactBar(target.type, target.id, recipe.social, false)}
-    </div>
-  </a>`;
+  return `<article class="card">
+    <a class="card-link" href="#/recipe/${recipe.id}">
+      ${recipe.image ? `<img src="${esc(asset(recipe.image))}" alt="${esc(recipe.title)}">` : `<div class="ph"></div>`}
+      <div>
+        <div class="kicker">${esc(cuisineLabel(recipe.cuisine))} · ${esc(recipe.category)}${recipe.family ? `<span class="badge">Tex's kitchen</span>` : ""}</div>
+        <h2>${esc(recipe.title)}</h2>
+        <p>${esc(recipe.summary)}</p>
+        ${recipe.author ? `<p class="empty">From ${esc(recipe.author.name)}</p>` : ""}
+      </div>
+    </a>
+    <div class="card-actions">${linkTools(recipeLink(recipe), recipe.title)}${reactBar(target.type, target.id, recipe.social, false)}</div>
+  </article>`;
 }
 
 function recipeView(recipe) {
@@ -499,6 +525,7 @@ function recipeView(recipe) {
           <button class="btn" data-action="print">Print</button>
           <button class="btn moss" data-action="share" data-title="${esc(shareText)}" data-url="${esc(link)}">Share</button>
           <button class="btn quiet" data-action="copy" data-text="${esc(`${shareText}\n${link}`)}">Copy link</button>
+          <button class="btn quiet" data-action="send-link" data-url="${esc(link)}" data-title="${esc(recipe.title)}">Send in a message</button>
           <a class="btn quiet" href="sms:?&body=${encodeURIComponent(`${shareText} ${link}`)}">Text</a>
           <a class="btn quiet" href="mailto:?subject=${encodeURIComponent(recipe.title)}&body=${encodeURIComponent(`${recipe.summary}\n\n${link}`)}">Email</a>
           ${recipe.world
@@ -662,6 +689,7 @@ function notePost(note) {
     ${note.body ? `<p>${esc(note.body)}</p>` : ""}
     ${media ? `<div class="post-media ${visual.length > 1 ? "many" : "one"}">${media}</div>` : ""}
     ${chips ? `<div class="file-row">${chips}</div>` : ""}
+    <div class="card-actions">${linkTools(pageLink("#/notes"), `${author.name || "Family"}: ${String(note.body || note.title || "A note").slice(0, 140)}`)}</div>
     ${reactBar("note", note.id, note.social, true)}
   </article>`;
 }
@@ -791,6 +819,7 @@ function libraryCard(item) {
     ${!editing && item.notes ? `<p>${esc(item.notes)}</p>` : ""}
     ${!editing && item.description ? `<p>${esc(item.description)}</p>` : ""}
     ${!editing && item.url && !id && !hostedVideo(item.url) ? `<div class="actions"><button class="btn quiet" data-action="open-source" data-url="${esc(item.url)}" data-title="${esc(item.title)}">Open inside the book</button></div>` : ""}
+    <div class="card-actions">${linkTools(item.url && /^https?:\/\//.test(item.url) ? item.url : pageLink("#/studio"), item.title)}</div>
     ${reactBar("film", item.id, item.social, true)}
   </article>`;
 }
@@ -905,6 +934,12 @@ function render() {
   } else if (current.name === "profile" || current.name === "account") {
     document.title = current.name === "account" ? "Log in · Lisa's Recipe Book" : "Profile · Lisa's Recipe Book";
     html = current.name === "profile" ? profile() : accountGate("Log in with your email and password. First time here? Create an account in the next box.");
+  } else if (current.name === "messages") {
+    document.title = "Messages · Lisa's Recipe Book";
+    html = state.user ? shell(messagesView()) : accountGate("Log in to send a message or make a call.");
+  } else if (current.name === "search") {
+    document.title = "Search · Lisa's Recipe Book";
+    html = shell(searchView());
   } else if (current.name === "privacy") {
     document.title = "Privacy · Lisa's Recipe Book";
     html = privacyView();
@@ -915,9 +950,13 @@ function render() {
     document.title = "Lisa's Recipe Book";
     html = home();
   }
+  if (state.incoming) document.title = `${state.incoming.person?.name || "Someone"} is calling`;
+  else if (state.call) document.title = state.call.phase === "live" ? `On a call with ${state.call.person?.name || "family"}` : `Calling ${state.call.person?.name || "family"}`;
   root.innerHTML = html;
   state.menuFresh = false;
   document.body.classList.toggle("menu-open", state.menu);
+  attachCallMedia();
+  paintDeskBadge();
   const preview = document.getElementById("live-preview");
   if (preview && state.recording?.stream) {
     preview.srcObject = state.recording.stream;
@@ -1024,6 +1063,7 @@ document.addEventListener("click", async (event) => {
     if (href && href.startsWith("http")) await openSource(href, link.textContent);
     return;
   }
+  warmRinger();
   const jump = event.target.closest("a.menu-link, a.appbar-item");
   if (jump && state.menu) {
     state.menu = false;
@@ -1043,6 +1083,7 @@ document.addEventListener("click", async (event) => {
   }
   const action = button.dataset.action;
   try {
+    if (await deskAction(action, button)) return;
     if (action === "print") window.print();
     if (action === "copy") { await navigator.clipboard.writeText(button.dataset.text); say("Copied."); }
     if (action === "share") {
@@ -1235,6 +1276,7 @@ document.addEventListener("submit", async (event) => {
   event.preventDefault();
   const data = Object.fromEntries(new FormData(form).entries());
   try {
+    if (await deskSubmit(form, data)) return;
     if (form.classList.contains("comment-form")) {
       const text = String(data.body || "").trim();
       if (!text) throw new Error("Write a comment first.");
@@ -1637,7 +1679,7 @@ function closeCamera() {
   }
 }
 
-window.addEventListener("hashchange", () => { state.reader = null; state.menu = false; render(); });
+window.addEventListener("hashchange", () => { state.reader = null; state.menu = false; deskNavigated(); render(); });
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && state.menu) { state.menu = false; render(); }
 });
@@ -1897,5 +1939,7 @@ if (boot.error) {
     state.user = me.user;
     if (state.user) await refreshPrivate();
   } catch { /* a guest can still read */ }
+  bindDesk({ state, api, esc, go, say, face, render, route });
+  setInterval(() => { deskTick().catch(() => {}); }, 2500);
   render();
 }
