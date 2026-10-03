@@ -64,6 +64,22 @@ db.exec(`
     file_path TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL
   );
+  CREATE TABLE IF NOT EXISTS reactions (
+    user_id INTEGER NOT NULL,
+    target_type TEXT NOT NULL,
+    target_id TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (user_id, target_type, target_id, kind)
+  );
+  CREATE TABLE IF NOT EXISTS comments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    target_type TEXT NOT NULL,
+    target_id TEXT NOT NULL,
+    body TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  );
 `);
 
 try {

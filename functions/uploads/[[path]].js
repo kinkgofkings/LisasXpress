@@ -25,30 +25,35 @@ function serveParts(request, db, path, info) {
   const part = Number(info.part_size) || 800_000;
   const header = request.headers.get("range") || "";
   let start = 0;
-  let end = Math.min(part, size) - 1;
-  const match = /bytes=(\d+)-(\d*)/.exec(header);
-  if (match) {
-    start = Number(match[1]);
-    if (start >= size) {
+  let end = size - 1;
+  if (header) {
+    const match = /bytes=(\d*)-(\d*)/.exec(header);
+    if (!match || (match[1] === "" && match[2] === "")) {
       return new Response(null, { status: 416, headers: { "content-range": `bytes */${size}` } });
     }
-    const asked = match[2] ? Number(match[2]) : start + part - 1;
-    end = Math.min(asked, start + part - 1, size - 1);
+    if (match[1] === "") {
+      start = Math.max(0, size - Number(match[2]));
+    } else {
+      start = Number(match[1]);
+      end = match[2] === "" ? size - 1 : Number(match[2]);
+    }
+    if (!Number.isFinite(start) || start >= size || end < start) {
+      return new Response(null, { status: 416, headers: { "content-range": `bytes */${size}` } });
+    }
+    end = Math.min(end, size - 1);
   }
   return readRange(db, path, start, end - start + 1, part).then((body) => {
     if (!body?.byteLength) return new Response("Not found", { status: 404 });
     const last = start + body.byteLength - 1;
     const mime = String(info.mime || "application/octet-stream").split(";")[0];
-    return new Response(body, {
-      status: header || body.byteLength < size ? 206 : 200,
-      headers: {
-        "content-type": mime,
-        "content-length": String(body.byteLength),
-        "accept-ranges": "bytes",
-        "content-range": `bytes ${start}-${last}/${size}`,
-        "cache-control": "public, max-age=3600"
-      }
-    });
+    const headers = {
+      "content-type": mime,
+      "content-length": String(body.byteLength),
+      "accept-ranges": "bytes",
+      "cache-control": "private, max-age=3600"
+    };
+    if (header) headers["content-range"] = `bytes ${start}-${last}/${size}`;
+    return new Response(body, { status: header ? 206 : 200, headers });
   });
 }
 

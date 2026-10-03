@@ -173,6 +173,55 @@ app.post("/api/auth/avatar", imageUpload.single("avatar"), (req, res) => {
   res.json({ user: publicUser(db.prepare("SELECT * FROM users WHERE id = ?").get(user.id)) });
 });
 
+function emptySocial() {
+  return { likes: 0, stars: 0, liked: false, starred: false, comments: [] };
+}
+
+function attachSocial(user, type, rows, idOf) {
+  const ids = [...new Set(rows.map((row) => String(idOf(row))).filter(Boolean))];
+  const map = {};
+  for (const id of ids) map[id] = emptySocial();
+  if (ids.length) {
+    const marks = ids.map(() => "?").join(",");
+    const counts = db.prepare(
+      `SELECT target_id AS targetId, kind, COUNT(*) AS n FROM reactions WHERE target_type = ? AND target_id IN (${marks}) GROUP BY target_id, kind`
+    ).all(type, ...ids);
+    for (const row of counts) {
+      const box = map[String(row.targetId)];
+      if (!box) continue;
+      if (row.kind === "like") box.likes = Number(row.n) || 0;
+      if (row.kind === "star") box.stars = Number(row.n) || 0;
+    }
+    if (user) {
+      const mine = db.prepare(
+        `SELECT target_id AS targetId, kind FROM reactions WHERE user_id = ? AND target_type = ? AND target_id IN (${marks})`
+      ).all(user.id, type, ...ids);
+      for (const row of mine) {
+        const box = map[String(row.targetId)];
+        if (!box) continue;
+        if (row.kind === "like") box.liked = true;
+        if (row.kind === "star") box.starred = true;
+      }
+    }
+    const comments = db.prepare(`
+      SELECT comments.id, comments.body, comments.created_at AS createdAt, comments.target_id AS targetId,
+             users.id AS userId, users.name AS name, users.avatar_path AS avatar
+      FROM comments JOIN users ON users.id = comments.user_id
+      WHERE comments.target_type = ? AND comments.target_id IN (${marks})
+      ORDER BY comments.id ASC
+    `).all(type, ...ids);
+    for (const row of comments) {
+      map[String(row.targetId)]?.comments.push({
+        id: row.id,
+        body: row.body,
+        createdAt: row.createdAt,
+        author: { id: row.userId, name: row.name, avatar: row.avatar || "" }
+      });
+    }
+  }
+  return rows.map((row) => ({ ...row, social: map[String(idOf(row))] || emptySocial() }));
+}
+
 app.get("/api/recipes", (req, res) => {
   const cuisine = String(req.query.cuisine || "");
   const q = String(req.query.q || "").trim();
@@ -182,7 +231,7 @@ app.get("/api/recipes", (req, res) => {
       AND (? = '' OR title LIKE ? OR summary LIKE ?)
     ORDER BY family DESC, title COLLATE NOCASE
   `).all(cuisine, cuisine, q, `%${q}%`, `%${q}%`);
-  res.json({ recipes: rows.map(recipeRow) });
+  res.json({ recipes: attachSocial(userFrom(req), "recipe", rows.map(recipeRow), (item) => item.id) });
 });
 
 app.get("/api/recipes/:id", (req, res) => {
@@ -310,7 +359,11 @@ app.get("/api/notes", (req, res) => {
   const user = requireUser(req, res);
   if (!user) return;
   const notes = db.prepare("SELECT id, title, body, attachments, updated_at AS updatedAt FROM notes WHERE user_id = ? ORDER BY updated_at DESC").all(user.id);
-  res.json({ notes: notes.map(publicNote) });
+  const rows = notes.map((row) => ({
+    ...publicNote(row),
+    author: { id: user.id, name: user.name, avatar: user.avatar_path || "" }
+  }));
+  res.json({ notes: attachSocial(user, "note", rows, (item) => item.id) });
 });
 
 app.post("/api/notes", (req, res) => {
@@ -392,7 +445,7 @@ app.get("/api/library", (req, res) => {
     SELECT id, kind, title, url, description, notes, file_path AS filePath, created_at AS createdAt
     FROM library_items WHERE user_id = ? AND kind NOT IN ('tiktok', 'facebook') ORDER BY created_at DESC
   `).all(user.id);
-  res.json({ items });
+  res.json({ items: attachSocial(user, "film", items, (item) => item.id) });
 });
 
 app.post("/api/library", (req, res) => {
@@ -412,7 +465,11 @@ app.post("/api/media", (req, res) => {
   const stored = `${Date.now()}-${crypto.randomBytes(4).toString("hex")}${ext}`;
   const filePath = `/uploads/${stored}`;
   fs.writeFileSync(path.join(uploadDir, stored), Buffer.alloc(0));
-  const mime = String(req.body.mime || "").split(";")[0] || "application/octet-stream";
+  const suffix = String(name).split(".").pop()?.toLowerCase() || "";
+  let mime = String(req.body.mime || "").split(";")[0].trim().toLowerCase();
+  if (!mime || mime === "application/octet-stream") {
+    mime = { mp4: "video/mp4", m4v: "video/mp4", webm: "video/webm", mov: "video/quicktime", qt: "video/quicktime", jpg: "image/jpeg", jpeg: "image/jpeg", png: "image/png", webp: "image/webp", gif: "image/gif" }[suffix] || "application/octet-stream";
+  }
   const kind = mime.startsWith("video/") ? "video" : mime.startsWith("image/") ? "image" : "file";
   res.status(201).json({ path: filePath, partSize: FILM_PART, mime, name, kind });
 });
@@ -701,6 +758,74 @@ app.get("/api/search", (req, res) => {
 app.post("/api/ask", (req, res) => {
   const user = userFrom(req);
   deskSend(res, askHost(deskDb, user?.id || null, req.body?.question, null));
+});
+
+app.post("/api/reactions", (req, res) => {
+  const user = requireUser(req, res);
+  if (!user) return;
+  const type = String(req.body.targetType || "");
+  const id = String(req.body.targetId || "");
+  const kind = req.body.kind === "star" ? "star" : "like";
+  if (!["recipe", "note", "film", "world"].includes(type) || !id) {
+    return res.status(400).json({ error: "That could not be saved." });
+  }
+  const existing = db.prepare(
+    "SELECT 1 AS found FROM reactions WHERE user_id = ? AND target_type = ? AND target_id = ? AND kind = ?"
+  ).get(user.id, type, id, kind);
+  if (existing) {
+    db.prepare("DELETE FROM reactions WHERE user_id = ? AND target_type = ? AND target_id = ? AND kind = ?").run(user.id, type, id, kind);
+  } else {
+    db.prepare(
+      "INSERT INTO reactions (user_id, target_type, target_id, kind, created_at) VALUES (?, ?, ?, ?, ?)"
+    ).run(user.id, type, id, kind, new Date().toISOString());
+  }
+  const counts = db.prepare(
+    "SELECT kind, COUNT(*) AS n FROM reactions WHERE target_type = ? AND target_id = ? GROUP BY kind"
+  ).all(type, id);
+  const snap = { likes: 0, stars: 0, liked: false, starred: false };
+  for (const row of counts) {
+    if (row.kind === "like") snap.likes = Number(row.n) || 0;
+    if (row.kind === "star") snap.stars = Number(row.n) || 0;
+  }
+  const mine = db.prepare("SELECT kind FROM reactions WHERE user_id = ? AND target_type = ? AND target_id = ?").all(user.id, type, id);
+  for (const row of mine) {
+    if (row.kind === "like") snap.liked = true;
+    if (row.kind === "star") snap.starred = true;
+  }
+  res.json({ on: kind === "star" ? snap.starred : snap.liked, ...snap });
+});
+
+app.post("/api/comments", (req, res) => {
+  const user = requireUser(req, res);
+  if (!user) return;
+  const type = String(req.body.targetType || "");
+  const id = String(req.body.targetId || "");
+  const text = String(req.body.body || "").trim().slice(0, 1000);
+  if (!["recipe", "note", "film", "world"].includes(type) || !id) {
+    return res.status(400).json({ error: "That comment could not be saved." });
+  }
+  if (!text) return res.status(400).json({ error: "Write a comment first." });
+  const now = new Date().toISOString();
+  const result = db.prepare(
+    "INSERT INTO comments (user_id, target_type, target_id, body, created_at) VALUES (?, ?, ?, ?, ?)"
+  ).run(user.id, type, id, text, now);
+  res.status(201).json({
+    comment: {
+      id: Number(result.lastInsertRowid),
+      body: text,
+      createdAt: now,
+      author: { id: user.id, name: user.name, avatar: user.avatar_path || "" }
+    }
+  });
+});
+
+app.delete("/api/comments/:id", (req, res) => {
+  const user = requireUser(req, res);
+  if (!user) return;
+  const comment = db.prepare("SELECT id FROM comments WHERE id = ? AND user_id = ?").get(req.params.id, user.id);
+  if (!comment) return res.status(404).json({ error: "That comment is not yours." });
+  db.prepare("DELETE FROM comments WHERE id = ?").run(comment.id);
+  res.json({ ok: true });
 });
 
 app.get("/api/browse", async (req, res) => {

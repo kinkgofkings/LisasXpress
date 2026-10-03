@@ -57,7 +57,9 @@ const state = {
   hostQ: "",
   hostAnswer: null,
   hostBusy: false,
-  ringingFor: ""
+  ringingFor: "",
+  notePosting: false,
+  reacting: ""
 };
 const timer = { endAt: 0, pausedRemaining: 0, running: false, handle: null, alerted: false };
 let deferredInstall = null;
@@ -94,10 +96,54 @@ async function shrinkImage(file) {
   }
 }
 
+function fileKind(file) {
+  const type = String(file?.type || "").toLowerCase();
+  const name = String(file?.name || "").toLowerCase();
+  if (type.startsWith("image/") || /\.(jpe?g|png|gif|webp|heic)$/.test(name)) return "image";
+  if (type.startsWith("video/") || /\.(mp4|webm|mov|m4v|qt)$/.test(name)) return "video";
+  return "file";
+}
+
+function fileLabel(file, kind) {
+  const name = String(file?.name || "").trim();
+  if (/\.[a-z0-9]+$/i.test(name)) return name;
+  if (kind === "video") {
+    const type = String(file?.type || "");
+    if (type.includes("quicktime")) return "video.mov";
+    if (type.includes("webm")) return "video.webm";
+    return "video.mp4";
+  }
+  if (kind === "image") return "photo.jpg";
+  return name || "file";
+}
+
+function guessMime(file, name) {
+  const type = String(file?.type || "").split(";")[0].trim().toLowerCase();
+  if (type && type !== "application/octet-stream") return type;
+  const label = String(name || file?.name || "").toLowerCase();
+  if (/\.mov$|\.qt$/.test(label)) return "video/quicktime";
+  if (/\.mp4$|\.m4v$/.test(label)) return "video/mp4";
+  if (/\.webm$/.test(label)) return "video/webm";
+  if (/\.png$/.test(label)) return "image/png";
+  if (/\.jpe?g$/.test(label)) return "image/jpeg";
+  if (/\.webp$/.test(label)) return "image/webp";
+  if (/\.gif$/.test(label)) return "image/gif";
+  return "application/octet-stream";
+}
+
+function mealDbPage(url) {
+  try {
+    return /(^|\.)themealdb\.com$/i.test(new URL(url).hostname);
+  } catch {
+    return /themealdb\.com/i.test(String(url || ""));
+  }
+}
+
 async function uploadPieces(file, name) {
+  const label = name || file.name || "file";
   const started = await api("/api/media", {
     method: "POST",
-    json: { mime: String(file.type || "").split(";")[0], size: file.size, name: name || file.name || "file" }
+    json: { mime: guessMime(file, label), size: file.size, name: label }
   });
   const part = started.partSize || 800_000;
   for (let offset = 0, idx = 0; offset < file.size; offset += part, idx += 1) {
@@ -469,6 +515,7 @@ function worldCard(meal) {
         <div class="kicker">Library${meal.category ? ` · ${esc(meal.category)}` : ""}${meal.area ? ` · ${esc(meal.area)}` : ""}</div>
         <h2>${esc(meal.title)}</h2>
         <p>From the open library.</p>
+        ${commentCount(meal.social)}
       </div>
     </a>
     <div class="card-actions">${add}${linkTools(pageLink(`#/world/${mealId}`), meal.title)}${reactBar("world", `mealdb-${mealId}`, meal.social, false)}</div>
@@ -484,6 +531,7 @@ function card(recipe) {
         <div class="kicker">${esc(cuisineLabel(recipe.cuisine))} · ${esc(recipe.category)}${recipe.family ? `<span class="badge">Tex's kitchen</span>` : ""}</div>
         <h2>${esc(recipe.title)}</h2>
         <p>${esc(recipe.summary)}</p>
+        ${commentCount(recipe.social)}
         ${recipe.author ? `<p class="empty">From ${esc(recipe.author.name)}</p>` : ""}
       </div>
     </a>
@@ -547,13 +595,14 @@ function recipeView(recipe) {
           <button class="btn quiet" data-action="timer-reset">Reset</button>
         </div>
         ${youtubeId(recipe.youtube) ? `<div class="watch"><iframe src="https://www.youtube-nocookie.com/embed/${esc(youtubeId(recipe.youtube))}?rel=0&playsinline=1" title="${esc(recipe.title)}" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; fullscreen" allowfullscreen></iframe></div>` : ""}
-        ${reactBar(reactionTarget(recipe).type, reactionTarget(recipe).id, recipe.social, true)}
+        ${reactBar(reactionTarget(recipe).type, reactionTarget(recipe).id, recipe.social)}
+        ${commentsBlock(reactionTarget(recipe).type, reactionTarget(recipe).id, recipe.social)}
         <h3>Ingredients</h3>
         <ul>${recipe.ingredients.map((item) => `<li>${esc(item)}</li>`).join("")}</ul>
         <h3>Method</h3>
         <ol>${recipe.steps.map((item) => `<li>${esc(item)}</li>`).join("")}</ol>
         ${recipe.notes ? `<h3>Notes</h3><p>${esc(recipe.notes)}</p>` : ""}
-        ${recipe.sourceUrl ? `<p class="no-print"><button class="btn-line" data-action="open-source" data-url="${esc(recipe.sourceUrl)}" data-title="${esc(recipe.sourceTitle || "Source")}">Open “${esc(recipe.sourceTitle || "source")}” in the book</button></p>` : ""}
+        ${recipe.sourceUrl && !mealDbPage(recipe.sourceUrl) ? `<p class="no-print"><button class="btn-line" data-action="open-source" data-url="${esc(recipe.sourceUrl)}" data-title="${esc(recipe.sourceTitle || "Source")}">Open “${esc(recipe.sourceTitle || "source")}” in the book</button></p>` : ""}
         ${state.user && !recipe.world ? `<form class="no-print" id="media-form">
           <div class="field"><label>Add a picture or video<input type="file" name="file" accept="image/*,video/mp4,video/webm" required></label></div>
           <button class="btn moss" type="submit">Add to this recipe</button>
@@ -632,15 +681,11 @@ function notesView() {
         </div>
         ${picks ? `<div class="picks">${picks}</div>` : ""}
         <div class="composer-tools">
-          ${state.editingNote ? "" : `<button class="tool" type="button" data-action="note-pick" data-kind="image">${iconPhoto()}<span>Photo</span></button>
-          <button class="tool" type="button" data-action="note-pick" data-kind="video">${iconVideo()}<span>Video</span></button>
-          <button class="tool" type="button" data-action="note-pick" data-kind="file">${iconFile()}<span>File</span></button>`}
+          ${state.editingNote ? "" : `<label class="tool">${iconPhoto()}<span>Photo</span><input data-note-pick="image" type="file" accept="image/*" multiple></label>
+          <label class="tool">${iconVideo()}<span>Video</span><input data-note-pick="video" type="file" accept="video/*,.mov,.mp4,.m4v,.webm"></label>
+          <label class="tool">${iconFile()}<span>File</span><input data-note-pick="file" type="file" accept="application/pdf,text/plain,.pdf,.txt" multiple></label>`}
           ${state.editingNote ? `<button class="btn quiet" type="button" data-action="cancel-note">Cancel</button>` : ""}
-          <button class="btn" type="submit">${state.editingNote ? "Save" : "Post"}</button>
-        </div>
-        <input id="note-pick-image" data-note-pick="image" type="file" accept="image/*" multiple hidden>
-        <input id="note-pick-video" data-note-pick="video" type="file" accept="video/mp4,video/webm,video/quicktime" hidden>
-        <input id="note-pick-file" data-note-pick="file" type="file" accept="application/pdf,text/plain,.pdf,.txt" multiple hidden>
+          <button class="btn" type="submit" data-action="post-note">${state.notePosting ? "Posting…" : (state.editingNote ? "Save" : "Post")}</button>
       </form>
       ${state.notes.map(notePost).join("") || `<p class="empty composer-empty">Family notes will show up here.</p>`}
     </div>
@@ -690,23 +735,38 @@ function notePost(note) {
     ${media ? `<div class="post-media ${visual.length > 1 ? "many" : "one"}">${media}</div>` : ""}
     ${chips ? `<div class="file-row">${chips}</div>` : ""}
     <div class="card-actions">${linkTools(pageLink("#/notes"), `${author.name || "Family"}: ${String(note.body || note.title || "A note").slice(0, 140)}`)}</div>
-    ${reactBar("note", note.id, note.social, true)}
+    ${reactBar("note", note.id, note.social)}
+    ${commentsBlock("note", note.id, note.social)}
   </article>`;
 }
 
-function reactBar(type, id, social, withComments) {
+function commentCount(social) {
+  const count = social?.comments?.length || 0;
+  if (!count) return "";
+  return `<p class="empty">${count} ${count === 1 ? "comment" : "comments"}</p>`;
+}
+
+function reactBar(type, id, social) {
   if (!state.user) return "";
   const box = social || { likes: 0, stars: 0, liked: false, starred: false, comments: [] };
-  const comments = withComments ? `<form class="comment-form" data-type="${esc(type)}" data-id="${esc(id)}">
-      <input name="body" placeholder="Write a comment" required>
-      <button class="btn quiet" type="submit">Comment</button>
-    </form>
-    <div class="comments">${(box.comments || []).map(commentLine).join("")}</div>` : "";
   return `<div class="react">
     <button type="button" class="react-btn ${box.liked ? "on" : ""}" data-action="react" data-kind="like" data-type="${esc(type)}" data-id="${esc(id)}">Like${box.likes ? ` ${box.likes}` : ""}</button>
     <button type="button" class="react-btn ${box.starred ? "on" : ""}" data-action="react" data-kind="star" data-type="${esc(type)}" data-id="${esc(id)}">Star${box.stars ? ` ${box.stars}` : ""}</button>
-    ${comments}
   </div>`;
+}
+
+function commentsBlock(type, id, social) {
+  const comments = Array.isArray(social?.comments) ? social.comments : [];
+  const list = comments.length
+    ? `<div class="comments">${comments.map(commentLine).join("")}</div>`
+    : `<p class="empty">No comments yet.</p>`;
+  const form = state.user
+    ? `<form class="comment-form" data-type="${esc(type)}" data-id="${esc(id)}">
+        <input name="body" placeholder="Write a comment" required>
+        <button class="btn quiet" type="submit">Comment</button>
+      </form>`
+    : `<p class="empty"><a href="#/account">Log in</a> to leave a comment.</p>`;
+  return `<section class="comments-block"><h3>Comments</h3>${list}${form}</section>`;
 }
 
 function commentLine(comment) {
@@ -818,9 +878,10 @@ function libraryCard(item) {
     ${id ? `<iframe class="frame" src="https://www.youtube-nocookie.com/embed/${esc(id)}?rel=0&playsinline=1" title="${esc(item.title)}" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; fullscreen" allowfullscreen></iframe>` : ""}
     ${!editing && item.notes ? `<p>${esc(item.notes)}</p>` : ""}
     ${!editing && item.description ? `<p>${esc(item.description)}</p>` : ""}
-    ${!editing && item.url && !id && !hostedVideo(item.url) ? `<div class="actions"><button class="btn quiet" data-action="open-source" data-url="${esc(item.url)}" data-title="${esc(item.title)}">Open inside the book</button></div>` : ""}
+    ${!editing && item.url && !id && !hostedVideo(item.url) && !mealDbPage(item.url) ? `<div class="actions"><button class="btn quiet" data-action="open-source" data-url="${esc(item.url)}" data-title="${esc(item.title)}">Open inside the book</button></div>` : ""}
     <div class="card-actions">${linkTools(item.url && /^https?:\/\//.test(item.url) ? item.url : pageLink("#/studio"), item.title)}</div>
-    ${reactBar("film", item.id, item.social, true)}
+    ${reactBar("film", item.id, item.social)}
+    ${commentsBlock("film", item.id, item.social)}
   </article>`;
 }
 
@@ -977,6 +1038,7 @@ async function openSource(url, title, from) {
     say("TikTok and Facebook stay out of the book.");
     return;
   }
+  if (mealDbPage(url)) return;
   const watch = watchPage(url, title);
   if (watch) {
     state.reader.loading = false;
@@ -1083,6 +1145,12 @@ document.addEventListener("click", async (event) => {
   }
   const action = button.dataset.action;
   try {
+    if (action === "post-note") {
+      event.preventDefault();
+      const form = button.closest("form");
+      if (form) await postNote(form);
+      return;
+    }
     if (await deskAction(action, button)) return;
     if (action === "print") window.print();
     if (action === "copy") { await navigator.clipboard.writeText(button.dataset.text); say("Copied."); }
@@ -1163,11 +1231,26 @@ document.addEventListener("click", async (event) => {
       const type = button.dataset.type;
       const id = button.dataset.id;
       const kind = button.dataset.kind;
-      await api("/api/reactions", { method: "POST", json: { targetType: type, targetId: id, kind } });
+      const lock = `${type}:${id}:${kind}`;
+      if (state.reacting === lock) return;
+      state.reacting = lock;
       flipSocial(type, id, kind);
-      await refreshPrivate();
-      if (type === "world" && route().name === "world") await ensureWorld(route().id);
-      else render();
+      render();
+      try {
+        const result = await api("/api/reactions", { method: "POST", json: { targetType: type, targetId: id, kind } });
+        applyReaction(type, id, result);
+        render();
+        refreshPrivate().then(() => {
+          if (type === "world" && route().name === "world") return ensureWorld(route().id);
+          render();
+        }).catch(() => {});
+      } catch (error) {
+        flipSocial(type, id, kind);
+        render();
+        say(error.message || "That did not work.");
+      } finally {
+        state.reacting = "";
+      }
     }
     if (action === "follow") {
       const result = await api(`/api/people/${button.dataset.id}/follow`, { method: "POST" });
@@ -1181,9 +1264,9 @@ document.addEventListener("click", async (event) => {
     }
     if (action === "delete-comment" && confirm("Delete this comment?")) {
       await api(`/api/comments/${button.dataset.id}`, { method: "DELETE" });
-      await refreshPrivate();
-      if (route().name === "world") await ensureWorld(route().id);
-      else render();
+      dropComment(button.dataset.id);
+      render();
+      refreshPrivate().then(() => render()).catch(() => {});
     }
     if (action === "delete-library" && confirm("Delete this?")) {
       await api(`/api/library/${button.dataset.id}`, { method: "DELETE" });
@@ -1252,23 +1335,90 @@ document.addEventListener("input", (event) => {
 document.addEventListener("change", async (event) => {
   const input = event.target;
   if (!(input instanceof HTMLInputElement) || !input.dataset.notePick) return;
-  const box = document.getElementById("note-body");
-  if (box) state.noteDraft = box.value;
-  const incoming = [...input.files];
-  input.value = "";
-  for (const file of incoming) {
-    const kind = file.type.startsWith("image/") ? "image" : file.type.startsWith("video/") ? "video" : "file";
-    const stored = kind === "image" ? await shrinkImage(file) : file;
-    state.noteFiles.push({
-      id: crypto.randomUUID(),
-      file: stored,
-      url: URL.createObjectURL(stored),
-      kind,
-      name: file.name || "File"
-    });
+  try {
+    const box = document.getElementById("note-body");
+    if (box) state.noteDraft = box.value;
+    const incoming = [...(input.files || [])];
+    input.value = "";
+    for (const file of incoming) {
+      if (!file?.size) {
+        say("That file did not come through. Try it again.");
+        continue;
+      }
+      if (file.size > 40_000_000) {
+        say("That video is too long for the notepad. Try a shorter clip.");
+        continue;
+      }
+      const picked = input.dataset.notePick;
+      let kind = fileKind(file);
+      if (picked === "video") kind = "video";
+      if (picked === "image" && kind !== "video") kind = "image";
+      const stored = kind === "image" ? await shrinkImage(file) : file;
+      state.noteFiles.push({
+        id: crypto.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+        file: stored,
+        url: URL.createObjectURL(stored),
+        kind,
+        name: fileLabel(file, kind)
+      });
+    }
+    render();
+  } catch (error) {
+    say(error.message || "That file did not come through. Try it again.");
   }
-  render();
 });
+
+let noteBusy = false;
+async function postNote(form) {
+  if (noteBusy) return;
+  noteBusy = true;
+  const text = String(new FormData(form).get("body") || state.noteDraft || "").trim();
+  const files = state.noteFiles.slice();
+  try {
+    if (state.editingNote) {
+      const payload = { body: text };
+      if (text) payload.title = text.split("\n")[0].slice(0, 80);
+      await api(`/api/notes/${state.editingNote}`, { method: "PATCH", json: payload });
+      state.editingNote = "";
+      state.noteDraft = "";
+      await refreshPrivate();
+      say("Note saved.");
+      return;
+    }
+    if (!text && !files.length) throw new Error("Write a note, or add a picture or video.");
+    state.notePosting = true;
+    state.noteDraft = text;
+    render();
+    const attachments = [];
+    for (const item of files) {
+      const saved = await uploadPieces(item.file, item.name);
+      const kind = item.kind === "video" || saved.kind === "video" ? "video" : item.kind === "image" || saved.kind === "image" ? "image" : "file";
+      attachments.push({ path: saved.path, name: item.name, kind });
+    }
+    const result = await api("/api/notes", { method: "POST", json: { body: text, attachments } });
+    const note = {
+      id: result.note?.id,
+      title: result.note?.title || text.split("\n")[0].slice(0, 80) || "Video",
+      body: text,
+      attachments: result.note?.attachments?.length ? result.note.attachments : attachments,
+      updatedAt: result.note?.updatedAt || new Date().toISOString(),
+      author: result.note?.author || state.user,
+      social: result.note?.social || { likes: 0, stars: 0, liked: false, starred: false, comments: [] }
+    };
+    files.forEach((item) => URL.revokeObjectURL(item.url));
+    state.noteFiles = state.noteFiles.filter((item) => !files.includes(item));
+    state.noteDraft = "";
+    state.notePosting = false;
+    state.notes = [note, ...state.notes.filter((item) => String(item.id) !== String(note.id))];
+    say("Posted.");
+    refreshPrivate().then(() => render()).catch(() => {});
+  } catch (error) {
+    state.notePosting = false;
+    say(error.message || "That note did not post. Try it again.");
+  } finally {
+    noteBusy = false;
+  }
+}
 
 document.addEventListener("submit", async (event) => {
   const form = event.target;
@@ -1280,10 +1430,20 @@ document.addEventListener("submit", async (event) => {
     if (form.classList.contains("comment-form")) {
       const text = String(data.body || "").trim();
       if (!text) throw new Error("Write a comment first.");
-      await api("/api/comments", { method: "POST", json: { targetType: form.dataset.type, targetId: form.dataset.id, body: text } });
-      await refreshPrivate();
-      if (form.dataset.type === "world" && route().name === "world") await ensureWorld(route().id);
-      else render();
+      const type = form.dataset.type;
+      const id = form.dataset.id;
+      const result = await api("/api/comments", { method: "POST", json: { targetType: type, targetId: id, body: text } });
+      pushComment(type, id, result.comment || {
+        id: `new-${Date.now()}`,
+        body: text,
+        createdAt: new Date().toISOString(),
+        author: state.user
+      });
+      render();
+      refreshPrivate().then(() => {
+        if (type === "world" && route().name === "world") return ensureWorld(route().id);
+        render();
+      }).catch(() => {});
       return;
     }
     if (form.id === "register-form" || form.id === "login-form") {
@@ -1333,31 +1493,7 @@ document.addEventListener("submit", async (event) => {
       render();
     }
     if (form.id === "note-form") {
-      const text = String(data.body || "").trim();
-      if (state.editingNote) {
-        const payload = { body: text };
-        if (text) payload.title = text.split("\n")[0].slice(0, 80);
-        await api(`/api/notes/${state.editingNote}`, { method: "PATCH", json: payload });
-        state.editingNote = "";
-        state.noteDraft = "";
-        await refreshPrivate();
-        say("Note saved.");
-        render();
-      } else {
-        if (!text && !state.noteFiles.length) throw new Error("Write a note, or add a picture.");
-        const attachments = [];
-        for (const item of state.noteFiles) {
-          const saved = await uploadPieces(item.file, item.name);
-          attachments.push({ path: saved.path, name: item.name, kind: saved.kind });
-        }
-        await api("/api/notes", { method: "POST", json: { body: text, attachments } });
-        state.noteFiles.forEach((item) => URL.revokeObjectURL(item.url));
-        state.noteFiles = [];
-        state.noteDraft = "";
-        await refreshPrivate();
-        say("Posted.");
-        render();
-      }
+      await postNote(form);
     }
     if (form.id === "link-form") {
       const url = String(data.url || "").trim();
@@ -1420,37 +1556,79 @@ document.addEventListener("submit", async (event) => {
   }
 });
 
-function flipSocial(type, id, kind) {
-  const apply = (social) => {
-    const box = { likes: 0, stars: 0, liked: false, starred: false, comments: [], ...(social || {}) };
-    if (kind === "star") {
-      box.starred = !box.starred;
-      box.stars = Math.max(0, box.stars + (box.starred ? 1 : -1));
-    } else {
-      box.liked = !box.liked;
-      box.likes = Math.max(0, box.likes + (box.liked ? 1 : -1));
-    }
-    return box;
-  };
+function blankSocial(social) {
+  return { likes: 0, stars: 0, liked: false, starred: false, comments: [], ...(social || {}) };
+}
+
+function eachTarget(type, id, visit) {
   const mealId = String(id).replace(/^mealdb-/, "");
+  const touch = (item) => {
+    const key = reactionTarget(item);
+    if (key.type === type && key.id === id) item.social = visit(item.social);
+  };
   for (const list of [state.shelf, state.featured, state.bookHits]) {
-    for (const meal of list) {
-      if (type === "world" && String(meal.id).replace(/^mealdb-/, "") === mealId) meal.social = apply(meal.social);
+    for (const meal of list || []) {
+      if (!meal) continue;
+      if (type === "world" && String(meal.id).replace(/^mealdb-/, "") === mealId) meal.social = visit(meal.social);
     }
   }
-  for (const recipe of Object.values(state.worldCache)) {
-    if (recipe && reactionTarget(recipe).type === type && reactionTarget(recipe).id === id) recipe.social = apply(recipe.social);
-  }
-  for (const recipe of state.recipes) {
-    const key = reactionTarget(recipe);
-    if (key.type === type && key.id === id) recipe.social = apply(recipe.social);
-  }
+  for (const recipe of Object.values(state.worldCache)) if (recipe) touch(recipe);
+  for (const recipe of state.recipes) touch(recipe);
   for (const note of state.notes) {
-    if (type === "note" && String(note.id) === String(id)) note.social = apply(note.social);
+    if (type === "note" && String(note.id) === String(id)) note.social = visit(note.social);
   }
   for (const item of state.library) {
-    if (type === "film" && String(item.id) === String(id)) item.social = apply(item.social);
+    if (type === "film" && String(item.id) === String(id)) item.social = visit(item.social);
   }
+}
+
+function flipSocial(type, id, kind) {
+  eachTarget(type, id, (social) => {
+    const box = blankSocial(social);
+    if (kind === "star") {
+      box.starred = !box.starred;
+      box.stars = Math.max(0, (Number(box.stars) || 0) + (box.starred ? 1 : -1));
+    } else {
+      box.liked = !box.liked;
+      box.likes = Math.max(0, (Number(box.likes) || 0) + (box.liked ? 1 : -1));
+    }
+    return box;
+  });
+}
+
+function applyReaction(type, id, result) {
+  eachTarget(type, id, (social) => ({
+    ...blankSocial(social),
+    likes: Number(result?.likes) || 0,
+    stars: Number(result?.stars) || 0,
+    liked: Boolean(result?.liked),
+    starred: Boolean(result?.starred)
+  }));
+}
+
+function pushComment(type, id, comment) {
+  eachTarget(type, id, (social) => {
+    const box = blankSocial(social);
+    const comments = Array.isArray(box.comments) ? box.comments : [];
+    if (comment?.id && comments.some((item) => String(item.id) === String(comment.id))) return box;
+    box.comments = [...comments, comment];
+    return box;
+  });
+}
+
+function dropComment(commentId) {
+  const drop = (social) => {
+    const box = blankSocial(social);
+    box.comments = (box.comments || []).filter((item) => String(item.id) !== String(commentId));
+    return box;
+  };
+  for (const list of [state.shelf, state.featured, state.bookHits]) {
+    for (const meal of list || []) if (meal) meal.social = drop(meal.social);
+  }
+  for (const recipe of Object.values(state.worldCache)) if (recipe) recipe.social = drop(recipe.social);
+  for (const recipe of state.recipes) recipe.social = drop(recipe.social);
+  for (const note of state.notes) note.social = drop(note.social);
+  for (const item of state.library) item.social = drop(item.social);
 }
 
 async function runBookSearch() {
@@ -1923,7 +2101,7 @@ document.addEventListener("visibilitychange", () => {
 
 window.addEventListener("pageshow", () => tickTimer());
 
-if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js?v=3").catch(() => {});
+if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js?v=4").catch(() => {});
 restoreTimer();
 await rememberIfInstalled();
 offerInstall();

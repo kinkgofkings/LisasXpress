@@ -553,7 +553,14 @@ async function socialFor(env, user, type, ids) {
   const map = {};
   const keys = [...new Set(ids.map((id) => String(id)))].filter(Boolean);
   for (const id of keys) map[id] = emptySocial();
-  if (!keys.length) return map;
+  for (let index = 0; index < keys.length; index += 40) {
+    await fillSocial(env, user, type, keys.slice(index, index + 40), map);
+  }
+  return map;
+}
+
+async function fillSocial(env, user, type, keys, map) {
+  if (!keys.length) return;
   const marks = keys.map(() => "?").join(",");
   const counts = await env.DB.prepare(
     `SELECT target_id AS targetId, kind, COUNT(*) AS n FROM reactions WHERE target_type = ? AND target_id IN (${marks}) GROUP BY target_id, kind`
@@ -561,8 +568,8 @@ async function socialFor(env, user, type, ids) {
   for (const row of counts.results || []) {
     const box = map[String(row.targetId)];
     if (!box) continue;
-    if (row.kind === "like") box.likes = row.n;
-    if (row.kind === "star") box.stars = row.n;
+    if (row.kind === "like") box.likes = Number(row.n) || 0;
+    if (row.kind === "star") box.stars = Number(row.n) || 0;
   }
   if (user) {
     const mine = await env.DB.prepare(
@@ -584,13 +591,33 @@ async function socialFor(env, user, type, ids) {
   ).bind(type, ...keys).all();
   for (const row of comments.results || []) {
     map[String(row.targetId)]?.comments.push({
-      id: row.id,
+      id: Number(row.id),
       body: row.body,
       createdAt: row.createdAt,
       author: { id: row.userId, name: row.name, avatar: row.avatar }
     });
   }
-  return map;
+}
+
+async function reactionSnapshot(env, user, type, id) {
+  const counts = await env.DB.prepare(
+    "SELECT kind, COUNT(*) AS n FROM reactions WHERE target_type = ? AND target_id = ? GROUP BY kind"
+  ).bind(type, id).all();
+  const snap = { likes: 0, stars: 0, liked: false, starred: false };
+  for (const row of counts.results || []) {
+    if (row.kind === "like") snap.likes = Number(row.n) || 0;
+    if (row.kind === "star") snap.stars = Number(row.n) || 0;
+  }
+  if (user) {
+    const mine = await env.DB.prepare(
+      "SELECT kind FROM reactions WHERE user_id = ? AND target_type = ? AND target_id = ?"
+    ).bind(user.id, type, id).all();
+    for (const row of mine.results || []) {
+      if (row.kind === "like") snap.liked = true;
+      if (row.kind === "star") snap.starred = true;
+    }
+  }
+  return snap;
 }
 
 function reactionTarget(item) {
@@ -680,16 +707,21 @@ async function toggleReaction(request, env) {
   const existing = await env.DB.prepare(
     "SELECT 1 AS found FROM reactions WHERE user_id = ? AND target_type = ? AND target_id = ? AND kind = ?"
   ).bind(user.id, type, id, kind).first();
-  if (existing) {
-    await env.DB.prepare(
-      "DELETE FROM reactions WHERE user_id = ? AND target_type = ? AND target_id = ? AND kind = ?"
-    ).bind(user.id, type, id, kind).run();
-    return json({ on: false });
+  try {
+    if (existing) {
+      await env.DB.prepare(
+        "DELETE FROM reactions WHERE user_id = ? AND target_type = ? AND target_id = ? AND kind = ?"
+      ).bind(user.id, type, id, kind).run();
+    } else {
+      await env.DB.prepare(
+        "INSERT INTO reactions (user_id, target_type, target_id, kind, created_at) VALUES (?, ?, ?, ?, ?)"
+      ).bind(user.id, type, id, kind, new Date().toISOString()).run();
+    }
+  } catch (error) {
+    if (!String(error?.message || error).includes("UNIQUE")) throw error;
   }
-  await env.DB.prepare(
-    "INSERT INTO reactions (user_id, target_type, target_id, kind, created_at) VALUES (?, ?, ?, ?, ?)"
-  ).bind(user.id, type, id, kind, new Date().toISOString()).run();
-  return json({ on: true });
+  const snap = await reactionSnapshot(env, user, type, id);
+  return json({ on: kind === "star" ? snap.starred : snap.liked, ...snap });
 }
 
 async function addComment(request, env) {
@@ -707,7 +739,7 @@ async function addComment(request, env) {
     "INSERT INTO comments (user_id, target_type, target_id, body, created_at) VALUES (?, ?, ?, ?, ?)"
   ).bind(user.id, type, id, text, now).run();
   return json({
-    comment: { id: result.meta.last_row_id, body: text, createdAt: now, author: person(user) }
+    comment: { id: Number(result.meta?.last_row_id) || 0, body: text, createdAt: now, author: person(user) }
   }, 201);
 }
 
@@ -804,6 +836,7 @@ async function startMedia(request, env) {
   const mime = cleanMediaType(body.mime, name);
   const size = Number(body.size);
   if (!Number.isFinite(size) || size < 1) return json({ error: "That file was empty." }, 400);
+  if (size > 40_000_000) return json({ error: "That video is too long for the notepad. Try a shorter clip." }, 400);
   const path = `/uploads/${Date.now()}-${crypto.randomUUID().slice(0, 8)}.${fileExt(mime, name)}`;
   await env.DB.prepare(
     "INSERT INTO files (path, mime, bytes, byte_size, part_size) VALUES (?, ?, ?, ?, ?)"
@@ -830,10 +863,14 @@ async function saveMediaPart(request, env, url) {
   if (!bytes.byteLength || bytes.byteLength > 1_000_000) {
     return json({ error: "That file could not be saved. Try again." }, 400);
   }
-  await env.DB.prepare(`
-    INSERT INTO file_parts (path, idx, bytes) VALUES (?, ?, ?)
-    ON CONFLICT(path, idx) DO UPDATE SET bytes = excluded.bytes
-  `).bind(path, idx, bytes).run();
+  try {
+    await env.DB.prepare(`
+      INSERT INTO file_parts (path, idx, bytes) VALUES (?, ?, ?)
+      ON CONFLICT(path, idx) DO UPDATE SET bytes = excluded.bytes
+    `).bind(path, idx, bytes).run();
+  } catch {
+    return json({ error: "That video did not save. Try a shorter clip." }, 400);
+  }
   return json({ ok: true });
 }
 
@@ -966,7 +1003,17 @@ async function createNote(request, env) {
   const result = await env.DB.prepare(
     "INSERT INTO notes (user_id, title, body, attachments, updated_at) VALUES (?, ?, ?, ?, ?)"
   ).bind(user.id, title, text, JSON.stringify(attachments), now).run();
-  return json({ note: { id: result.meta.last_row_id, title, body: text, attachments, updatedAt: now } }, 201);
+  return json({
+    note: {
+      id: Number(result.meta?.last_row_id) || 0,
+      title,
+      body: text,
+      attachments,
+      updatedAt: now,
+      author: person(user),
+      social: emptySocial()
+    }
+  }, 201);
 }
 
 async function updateNote(request, env, id) {
