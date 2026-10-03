@@ -11,7 +11,8 @@ self.addEventListener("activate", (event) => {
 self.addEventListener("fetch", (event) => {
   const url = new URL(event.request.url);
   if (url.origin !== self.location.origin || url.pathname.startsWith("/api/")) return;
-  event.respondWith(fetch(event.request).catch(() => caches.match(event.request)));
+  const fresh = new Request(event.request, { cache: "no-store" });
+  event.respondWith(fetch(fresh).catch(() => caches.match(event.request)));
 });
 
 self.addEventListener("message", (event) => {

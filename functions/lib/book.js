@@ -453,7 +453,7 @@ function noteTitle(text, attachments) {
 }
 
 async function storeUpload(env, file) {
-  const type = file.type || "";
+  const type = String(file.type || "").split(";")[0].trim().toLowerCase();
   const kind = type.startsWith("image/") ? "image" : type.startsWith("video/") ? "video" : "file";
   const allowed = kind === "image"
     ? /^image\/(jpeg|png|webp|gif)$/

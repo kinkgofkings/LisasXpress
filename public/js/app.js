@@ -42,7 +42,7 @@ const esc = (value) => String(value ?? "").replace(/[&<>"']/g, (ch) => ({
 function asset(src) {
   if (!src) return "";
   if (/^https?:\/\//.test(src)) return src;
-  if (src.startsWith("/uploads/")) return `${API}${src}${src.includes("?") ? "&" : "?"}v=2`;
+  if (src.startsWith("/uploads/")) return `${API}${src}${src.includes("?") ? "&" : "?"}v=3`;
   return src;
 }
 
@@ -112,8 +112,13 @@ function cuisineLabel(cuisine) {
 function youtubeId(url) {
   try {
     const parsed = new URL(url);
-    if (parsed.hostname.includes("youtu.be")) return parsed.pathname.slice(1);
-    return parsed.searchParams.get("v") || (parsed.pathname.match(/\/(embed|shorts)\/([^/]+)/) || [])[2] || "";
+    const host = parsed.hostname.replace(/^www\./, "");
+    let id = "";
+    if (host === "youtu.be") id = parsed.pathname.split("/").filter(Boolean)[0] || "";
+    else if (host.endsWith("youtube.com") || host.endsWith("youtube-nocookie.com")) {
+      id = parsed.searchParams.get("v") || (parsed.pathname.match(/\/(?:embed|shorts|live)\/([^/?]+)/) || [])[1] || "";
+    }
+    return /^[\w-]{6,}$/.test(id) ? id : "";
   } catch { return ""; }
 }
 function pad(n) { return String(n).padStart(2, "0"); }
@@ -500,7 +505,7 @@ function cameraStage() {
   const rec = state.recording;
   if (!rec?.stream && !rec?.url) return `<button class="btn quiet" type="button" data-action="camera-open">Open camera</button>`;
   const live = Boolean(rec.stream);
-  return `<div class="stage ${live ? "" : "review"}">
+  return `<div class="stage ${live ? "" : "review"} ${rec.on ? "filming" : ""}">
     <video id="live-preview" playsinline ${live ? "autoplay muted" : `controls src="${esc(rec.url)}"`}></video>
     <div class="stage-bar">
       ${live && !rec.on ? `<button class="stage-side" type="button" data-action="camera-flip">Flip</button>` : `<span class="stage-side" id="rec-clock">${rec.on ? "0:00" : ""}</span>`}
@@ -665,6 +670,13 @@ async function openSource(url, title, from) {
     state.reader.fromId = from.id;
     state.reader.stack = [];
   }
+  const watch = watchPage(url, title);
+  if (watch) {
+    state.reader.loading = false;
+    state.reader.stack.push(watch);
+    render();
+    return;
+  }
   state.reader.loading = true;
   render();
   try {
@@ -677,6 +689,29 @@ async function openSource(url, title, from) {
     state.reader = null;
     say(error.message);
   }
+}
+
+function watchPage(url, title) {
+  const name = title || "Video";
+  const youtube = youtubeId(url);
+  if (youtube) return { title: name, url, html: watchFrame(`https://www.youtube-nocookie.com/embed/${youtube}?rel=0&playsinline=1`, name) };
+  let host = "";
+  try { host = new URL(url).hostname.replace(/^www\./, ""); } catch { return null; }
+  if (host === "youtu.be" || host.endsWith("youtube.com")) {
+    return { title: name, url, html: "<p>That YouTube link did not include a video.</p>" };
+  }
+  const tiktok = String(url).match(/\/video\/(\d+)/);
+  if (host.endsWith("tiktok.com") && tiktok) {
+    return { title: name, url, html: watchFrame(`https://www.tiktok.com/embed/v2/${tiktok[1]}`, name) };
+  }
+  if (host.endsWith("facebook.com") || host === "fb.watch") {
+    return { title: name, url, html: watchFrame(`https://www.facebook.com/plugins/video.php?href=${encodeURIComponent(url)}&show_text=false`, name) };
+  }
+  return null;
+}
+
+function watchFrame(src, title) {
+  return `<div class="watch"><iframe src="${esc(src)}" title="${esc(title)}" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; fullscreen" allowfullscreen></iframe></div>`;
 }
 
 async function refreshPrivate() {
@@ -1066,7 +1101,7 @@ async function openCamera(facing = "environment") {
   try {
     stream = await navigator.mediaDevices.getUserMedia({
       audio: true,
-      video: { facingMode: { ideal: facing }, width: { ideal: 640 }, height: { ideal: 480 } }
+      video: { facingMode: { ideal: facing } }
     });
   } catch {
     say("Allow the camera, then tap Open camera again.");
@@ -1083,6 +1118,12 @@ async function startRecording() {
     say("This phone can show the camera, but it cannot record here. Choose a video file instead.");
     return;
   }
+  const preview = document.getElementById("live-preview");
+  await waitForPicture(preview);
+  if (!preview?.videoWidth) {
+    say("The camera has not shown a picture yet. Wait a moment, then tap Record.");
+    return;
+  }
   const mime = recorderMime();
   const stream = state.recording.stream;
   const facing = state.recording.facing;
@@ -1090,7 +1131,7 @@ async function startRecording() {
   try {
     recorder = new MediaRecorder(stream, {
       ...(mime ? { mimeType: mime } : {}),
-      videoBitsPerSecond: 500_000,
+      videoBitsPerSecond: 1_200_000,
       audioBitsPerSecond: 64_000
     });
   } catch {
@@ -1108,20 +1149,36 @@ async function startRecording() {
       render();
       return;
     }
-    const blob = new Blob(chunks, { type: recorder.mimeType || mime || "video/webm" });
+    const type = (recorder.mimeType || mime || "video/webm").split(";")[0];
+    const blob = new Blob(chunks, { type });
     rememberFilm();
     state.recording = { blob, url: URL.createObjectURL(blob), on: false, facing };
     render();
   };
-  recorder.start();
+  recorder.start(200);
   state.recording = { stream, recorder, facing, on: true, started: Date.now(), blob: null, url: "" };
   rememberFilm();
   render();
   startClock();
 }
 
+async function waitForPicture(video) {
+  if (!video) return;
+  try { await video.play(); } catch { /* the preview may already be playing */ }
+  if (video.videoWidth > 0) return;
+  await new Promise((resolve) => {
+    const finish = () => resolve();
+    if (video.requestVideoFrameCallback) video.requestVideoFrameCallback(() => finish());
+    else video.addEventListener("loadeddata", finish, { once: true });
+    setTimeout(finish, 800);
+  });
+}
+
 function stopRecording() {
-  if (state.recording?.recorder?.state === "recording") state.recording.recorder.stop();
+  const recorder = state.recording?.recorder;
+  if (recorder?.state !== "recording") return;
+  if (typeof recorder.requestData === "function") recorder.requestData();
+  recorder.stop();
 }
 
 function closeCamera() {
@@ -1379,7 +1436,7 @@ document.addEventListener("visibilitychange", () => {
 
 window.addEventListener("pageshow", () => tickTimer());
 
-if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});
+if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js?v=3").catch(() => {});
 restoreTimer();
 await rememberIfInstalled();
 offerInstall();
