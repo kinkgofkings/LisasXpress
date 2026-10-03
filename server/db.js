@@ -64,6 +64,12 @@ db.exec(`
     file_path TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL
   );
+  CREATE TABLE IF NOT EXISTS follows (
+    follower_id INTEGER NOT NULL,
+    following_id INTEGER NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (follower_id, following_id)
+  );
   CREATE TABLE IF NOT EXISTS reactions (
     user_id INTEGER NOT NULL,
     target_type TEXT NOT NULL,

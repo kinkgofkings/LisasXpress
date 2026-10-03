@@ -106,7 +106,7 @@ function lines(value) {
 }
 
 function cuisineOf(value) {
-  if (["cajun", "library", "texmex", "garden", "kids", "pets"].includes(value)) return value;
+  if (["cajun", "library", "texmex", "garden", "kids", "pets", "gym"].includes(value)) return value;
   return "texas";
 }
 
@@ -777,14 +777,80 @@ app.post("/api/ask", (req, res) => {
   deskSend(res, askHost(deskDb, user?.id || null, req.body?.question, null));
 });
 
+function personSocial(user, id) {
+  const counts = db.prepare(
+    "SELECT kind, COUNT(*) AS n FROM reactions WHERE target_type = 'person' AND target_id = ? GROUP BY kind"
+  ).all(String(id));
+  const snap = { likes: 0, stars: 0, liked: false, starred: false, comments: [] };
+  for (const row of counts) {
+    if (row.kind === "like") snap.likes = Number(row.n) || 0;
+    if (row.kind === "star") snap.stars = Number(row.n) || 0;
+  }
+  const mine = db.prepare(
+    "SELECT kind FROM reactions WHERE user_id = ? AND target_type = 'person' AND target_id = ?"
+  ).all(user.id, String(id));
+  for (const row of mine) {
+    if (row.kind === "like") snap.liked = true;
+    if (row.kind === "star") snap.starred = true;
+  }
+  return snap;
+}
+
+function personCard(user, row) {
+  const followers = db.prepare("SELECT COUNT(*) AS n FROM follows WHERE following_id = ?").get(row.id);
+  const following = db.prepare("SELECT 1 AS found FROM follows WHERE follower_id = ? AND following_id = ?").get(user.id, row.id);
+  return {
+    id: row.id,
+    name: row.name,
+    bio: row.bio || "",
+    avatar: row.avatar_path || "",
+    following: Boolean(following),
+    followers: Number(followers?.n) || 0,
+    social: personSocial(user, row.id)
+  };
+}
+
+app.get("/api/people", (req, res) => {
+  const user = requireUser(req, res);
+  if (!user) return;
+  const people = db.prepare("SELECT id, name, bio, avatar_path FROM users ORDER BY name COLLATE NOCASE").all();
+  res.json({ people: people.map((row) => personCard(user, row)) });
+});
+
+app.get("/api/people/:id", (req, res) => {
+  const user = requireUser(req, res);
+  if (!user) return;
+  const row = db.prepare("SELECT id, name, bio, avatar_path FROM users WHERE id = ?").get(req.params.id);
+  if (!row) return res.status(404).json({ error: "That person is not in the book." });
+  res.json({ person: personCard(user, row) });
+});
+
+app.post("/api/people/:id/follow", (req, res) => {
+  const user = requireUser(req, res);
+  if (!user) return;
+  if (String(user.id) === String(req.params.id)) return res.status(400).json({ error: "That is your own account." });
+  const other = db.prepare("SELECT id FROM users WHERE id = ?").get(req.params.id);
+  if (!other) return res.status(404).json({ error: "That person is not in the book." });
+  const existing = db.prepare("SELECT 1 AS found FROM follows WHERE follower_id = ? AND following_id = ?").get(user.id, req.params.id);
+  if (existing) {
+    db.prepare("DELETE FROM follows WHERE follower_id = ? AND following_id = ?").run(user.id, req.params.id);
+    return res.json({ following: false });
+  }
+  db.prepare("INSERT INTO follows (follower_id, following_id, created_at) VALUES (?, ?, ?)").run(user.id, req.params.id, new Date().toISOString());
+  res.json({ following: true });
+});
+
 app.post("/api/reactions", (req, res) => {
   const user = requireUser(req, res);
   if (!user) return;
   const type = String(req.body.targetType || "");
   const id = String(req.body.targetId || "");
   const kind = req.body.kind === "star" ? "star" : "like";
-  if (!["recipe", "note", "film", "world"].includes(type) || !id) {
+  if (!["recipe", "note", "film", "world", "person"].includes(type) || !id) {
     return res.status(400).json({ error: "That could not be saved." });
+  }
+  if (type === "person" && !db.prepare("SELECT id FROM users WHERE id = ?").get(id)) {
+    return res.status(404).json({ error: "That could not be found." });
   }
   const existing = db.prepare(
     "SELECT 1 AS found FROM reactions WHERE user_id = ? AND target_type = ? AND target_id = ? AND kind = ?"

@@ -1,6 +1,7 @@
 import { STAPLES } from "./staples.js";
 import { MORE } from "./more-plates.js";
 import { DOG_MEALS } from "./dog-meals.js";
+import { GYM } from "./gym.js";
 
 const commons = "Wikimedia Commons";
 const book = "Photograph for Lisa's Recipe Book";
@@ -999,4 +1000,4 @@ const BOOK = [
   }
 ];
 
-export const RECIPES = [...BOOK, ...STAPLES, ...MORE, ...DOG_MEALS];
+export const RECIPES = [...BOOK, ...STAPLES, ...MORE, ...DOG_MEALS, ...GYM];

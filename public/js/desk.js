@@ -139,7 +139,7 @@ function threadList() {
     ${draft}
     <h3>Active now</h3>
     <div class="active-row">
-      ${active.length ? active.map((person) => `<a class="active-person" href="#/messages/${esc(person.id)}">${deps.face({ ...person, active: true })}<span>${esc(person.name.split(" ")[0])}</span></a>`).join("") : `<p class="empty">Nobody else is in the book this minute.</p>`}
+      ${active.length ? active.map((person) => `<span class="active-person">${deps.face({ ...person, active: true })}<a href="#/messages/${esc(person.id)}">${esc(person.name.split(" ")[0])}</a></span>`).join("") : `<p class="empty">Nobody else is in the book this minute.</p>`}
     </div>
     <div class="stack">
       ${(state.threads || []).map(threadRow).join("") || (state.threadListReady === "ready" ? `<p class="empty">No other accounts yet.</p>` : `<p class="empty">Opening messages…</p>`)}
@@ -149,15 +149,15 @@ function threadList() {
 function threadRow(thread) {
   const person = thread.person;
   const preview = thread.last ? `${thread.last.mine ? "You: " : ""}${thread.last.body}` : "No messages yet";
-  return `<a class="panel thread-row" href="#/messages/${esc(person.id)}">
+  return `<div class="panel thread-row">
     <span class="presence ${person.active ? "on" : ""}">${deps.face(person)}</span>
-    <span>
+    <a class="thread-main" href="#/messages/${esc(person.id)}">
       <strong>${esc(person.name)}</strong>
       ${person.active ? `<span class="live-dot">Active</span>` : ""}
       ${thread.unread ? `<span class="live-dot">${thread.unread} new</span>` : ""}
       <span class="empty">${esc(preview.slice(0, 90))}</span>
-    </span>
-  </a>`;
+    </a>
+  </div>`;
 }
 
 function threadView(id) {
@@ -263,7 +263,7 @@ function incomingCall(incoming) {
   const video = incoming.mode === "video";
   return `<div class="call-screen" role="dialog" aria-label="Incoming call" data-ringing="1">
     <p class="kicker">${video ? "Video call" : "Phone call"}</p>
-    <div class="call-face">${deps.face(incoming.person)}</div>
+    <div class="call-face">${deps.face(incoming.person, { link: false })}</div>
     <h2>${esc(incoming.person?.name || "Someone")} is calling</h2>
     <div class="actions">
       <button class="btn moss" type="button" data-action="answer-call">Answer</button>
@@ -278,7 +278,7 @@ function liveCall(call) {
   return `<div class="call-screen" role="dialog" aria-label="Call">
     <p class="kicker">${waiting ? "Calling" : "On the call"} · ${video ? "Video" : "Phone"}</p>
     <h2>${esc(call.person?.name || "")}</h2>
-    ${video ? `<video id="call-remote" autoplay playsinline></video><video id="call-local" autoplay playsinline muted></video>` : `<audio id="call-remote" autoplay></audio><div class="call-face">${deps.face(call.person)}</div>`}
+    ${video ? `<video id="call-remote" autoplay playsinline></video><video id="call-local" autoplay playsinline muted></video>` : `<audio id="call-remote" autoplay></audio><div class="call-face">${deps.face(call.person, { link: false })}</div>`}
     <p class="empty">${waiting ? "Ringing until they answer." : "You are connected."}</p>
     <div class="actions">
       <button class="btn quiet" type="button" data-action="mute-call">${call.muted ? "Unmute" : "Mute"}</button>

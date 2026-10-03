@@ -15,7 +15,7 @@ function lines(value) {
 }
 
 function cuisineOf(value) {
-  if (["cajun", "library", "texmex", "garden", "kids", "pets"].includes(value)) return value;
+  if (["cajun", "library", "texmex", "garden", "kids", "pets", "gym"].includes(value)) return value;
   return "texas";
 }
 
@@ -283,6 +283,7 @@ async function route(request, env, url, parts) {
   if (first === "notes" && second && method === "DELETE") return deleteNote(request, env, second);
 
   if (first === "people" && !second && method === "GET") return listPeople(request, env);
+  if (first === "people" && second && !third && method === "GET") return onePerson(request, env, second);
   if (first === "people" && second && third === "follow" && method === "POST") return toggleFollow(request, env, second);
   if (first === "reactions" && !second && method === "POST") return toggleReaction(request, env);
   if (first === "comments" && !second && method === "POST") return addComment(request, env);
@@ -669,6 +670,7 @@ async function targetExists(env, type, id) {
   if (type === "recipe") return env.DB.prepare("SELECT id FROM recipes WHERE id = ?").bind(id).first();
   if (type === "note") return env.DB.prepare("SELECT id FROM notes WHERE id = ?").bind(id).first();
   if (type === "film") return env.DB.prepare("SELECT id FROM library_items WHERE id = ? AND kind NOT IN ('tiktok', 'facebook')").bind(id).first();
+  if (type === "person") return env.DB.prepare("SELECT id FROM users WHERE id = ?").bind(id).first();
   if (type === "world") {
     const mealId = String(id).replace(/^mealdb-/, "");
     if (!/^\d+$/.test(mealId)) return null;
@@ -688,12 +690,33 @@ async function listPeople(request, env) {
   const people = await env.DB.prepare("SELECT id, name, bio, avatar_path FROM users ORDER BY name COLLATE NOCASE").all();
   const follows = await env.DB.prepare("SELECT follower_id AS followerId, following_id AS followingId FROM follows").all();
   const rows = follows.results || [];
+  const listed = people.results || [];
+  const social = await socialFor(env, user, "person", listed.map((row) => row.id));
   return json({
-    people: (people.results || []).map((row) => ({
+    people: listed.map((row) => ({
       ...person(row),
       following: rows.some((item) => String(item.followerId) === String(user.id) && String(item.followingId) === String(row.id)),
-      followers: rows.filter((item) => String(item.followingId) === String(row.id)).length
+      followers: rows.filter((item) => String(item.followingId) === String(row.id)).length,
+      social: social[String(row.id)] || emptySocial()
     }))
+  });
+}
+
+async function onePerson(request, env, id) {
+  const user = await userFrom(env, request);
+  if (!user) return json({ error: "Sign in first." }, 401);
+  const row = await env.DB.prepare("SELECT id, name, bio, avatar_path FROM users WHERE id = ?").bind(id).first();
+  if (!row) return json({ error: "That person is not in the book." }, 404);
+  const follows = await env.DB.prepare("SELECT follower_id AS followerId, following_id AS followingId FROM follows WHERE following_id = ? OR follower_id = ?").bind(id, user.id).all();
+  const rows = follows.results || [];
+  const social = await socialFor(env, user, "person", [id]);
+  return json({
+    person: {
+      ...person(row),
+      following: rows.some((item) => String(item.followerId) === String(user.id) && String(item.followingId) === String(row.id)),
+      followers: rows.filter((item) => String(item.followingId) === String(row.id)).length,
+      social: social[String(row.id)] || emptySocial()
+    }
   });
 }
 
@@ -719,7 +742,7 @@ async function toggleReaction(request, env) {
   const type = String(body.targetType || "");
   const id = String(body.targetId || "");
   const kind = body.kind === "star" ? "star" : "like";
-  if (!["recipe", "note", "film", "world"].includes(type) || !id) return json({ error: "That could not be saved." }, 400);
+  if (!["recipe", "note", "film", "world", "person"].includes(type) || !id) return json({ error: "That could not be saved." }, 400);
   if (!await targetExists(env, type, id)) return json({ error: "That could not be found." }, 404);
   const existing = await env.DB.prepare(
     "SELECT 1 AS found FROM reactions WHERE user_id = ? AND target_type = ? AND target_id = ? AND kind = ?"

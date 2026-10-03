@@ -1,4 +1,4 @@
-import { attachCallMedia, bindDesk, callLayer, deskAction, deskNavigated, deskSubmit, deskTick, linkTools, messagesView, pageLink, paintDeskBadge, searchView, warmRinger } from "./desk.js?v=23";
+import { attachCallMedia, bindDesk, callLayer, deskAction, deskNavigated, deskSubmit, deskTick, linkTools, messagesView, pageLink, paintDeskBadge, searchView, warmRinger } from "./desk.js?v=24";
 
 const API = window.APP_CONFIG?.apiBase || "";
 const state = {
@@ -206,6 +206,7 @@ function cuisineLabel(cuisine) {
   if (cuisine === "pets") return "The Pet Connection";
   if (cuisine === "kids") return "Little ones";
   if (cuisine === "library") return "Library";
+  if (cuisine === "gym") return "The Gym";
   return cuisine || "";
 }
 
@@ -217,6 +218,7 @@ function matchesChip(recipe) {
   if (state.cuisine === "garden") return recipe.cuisine === "garden" || recipe.category === "Garden";
   if (state.cuisine === "pets") return recipe.cuisine === "pets";
   if (state.cuisine === "kids") return recipe.cuisine === "kids";
+  if (state.cuisine === "gym") return recipe.cuisine === "gym";
   if (state.cuisine === "stews") return /stew|pot roast/i.test(`${recipe.title} ${recipe.category}`);
   return recipe.cuisine === state.cuisine;
 }
@@ -465,7 +467,7 @@ function home() {
     </section>
     <div class="toolbar">
       <input id="q" placeholder="Search the book" value="${esc(state.q)}">
-      ${[["all", "All"], ["texas", "Texas"], ["texmex", "Tex-Mex"], ["stews", "Stews"], ["breakfast", "Breakfast"], ["sweets", "Sweets"], ["kids", "Little ones"], ["pets", "The Pet Connection"], ["garden", "Garden"], ["cajun", "Cajun"], ["library", "Kept"]].map(([item, label]) => `<button type="button" class="chip ${state.cuisine === item ? "active" : ""}" data-cuisine="${item}">${label}</button>`).join("")}
+      ${[["all", "All"], ["gym", "The Gym"], ["texas", "Texas"], ["texmex", "Tex-Mex"], ["stews", "Stews"], ["breakfast", "Breakfast"], ["sweets", "Sweets"], ["kids", "Little ones"], ["pets", "The Pet Connection"], ["garden", "Garden"], ["cajun", "Cajun"], ["library", "Kept"]].map(([item, label]) => `<button type="button" class="chip ${state.cuisine === item ? "active" : ""}" data-cuisine="${item}">${label}</button>`).join("")}
       <span class="empty">${list.length} recipes</span>
     </div>
     ${!state.q.trim() && state.cuisine === "all" ? stapleBands() : ""}
@@ -502,6 +504,7 @@ function plateBand(kicker, title, recipes, limit = 4) {
 function stapleBands() {
   const plates = state.recipes;
   return [
+    plateBand("The Gym", "Protein plates for Benito and anyone who trains.", plates.filter((recipe) => recipe.cuisine === "gym"), 10),
     plateBand("Texas", "The Texas table.", plates.filter((recipe) => recipe.cuisine === "texas" && recipe.category === "Mains")),
     plateBand("Breakfast", "Morning plates.", plates.filter((recipe) => recipe.category === "Breakfast")),
     plateBand("Tex-Mex", "Tex-Mex, on this table.", plates.filter((recipe) => recipe.cuisine === "texmex" && recipe.category === "Mains")),
@@ -577,6 +580,7 @@ function recipeView(recipe) {
         ${recipe.cuisine === "pets" && recipe.category !== "Meals" ? `<p class="empty">A treat for the dog, not the whole supper. Ask the vet before a dog's food changes. Never use xylitol, chocolate, grapes, raisins, onion, or garlic.</p>` : ""}
         ${recipe.category === "Babies" ? `<p class="empty">For a baby who is already eating smooth food. No honey before the first birthday. Ask the baby's doctor before a new food.</p>` : ""}
         ${recipe.category === "Toddlers" ? `<p class="empty">Soft pieces for a toddler. Cut fruit small. These are snacks of fruit, yogurt, and oats, not a meal plan.</p>` : ""}
+        ${recipe.cuisine === "gym" ? `<p class="empty">A plate of meat, fish, eggs, or beans for a training day. This is food from the kitchen, not a vitamin plan.</p>` : ""}
         <div class="meta">
           <span>Serves ${esc(recipe.yieldText)}</span>
           ${recipe.prepMinutes ? `<span>Prep ${clock(recipe.prepMinutes)}</span>` : ""}
@@ -633,7 +637,7 @@ function editor(recipe) {
     <form id="recipe-form" class="panel">
       <div class="field"><label>Title<input name="title" required value="${esc(value.title)}"></label></div>
       <div class="split">
-        <div class="field"><label>Table<select name="cuisine">${[["texas", "Texas"], ["texmex", "Tex-Mex"], ["garden", "Garden"], ["kids", "Little ones"], ["pets", "The Pet Connection"], ["cajun", "Cajun"], ["library", "Library"]].map(([id, label]) => `<option value="${id}" ${value.cuisine === id ? "selected" : ""}>${label}</option>`).join("")}</select></label></div>
+        <div class="field"><label>Table<select name="cuisine">${[["texas", "Texas"], ["texmex", "Tex-Mex"], ["gym", "The Gym"], ["garden", "Garden"], ["kids", "Little ones"], ["pets", "The Pet Connection"], ["cajun", "Cajun"], ["library", "Library"]].map(([id, label]) => `<option value="${id}" ${value.cuisine === id ? "selected" : ""}>${label}</option>`).join("")}</select></label></div>
         <div class="field"><label>Kind<select name="category">${["Mains", "Sides", "Breakfast", "Sweets", "Drinks", "Garden", "Babies", "Toddlers", "Meals", "Pets"].map((item) => `<option ${value.category === item ? "selected" : ""}>${item}</option>`).join("")}</select></label></div>
       </div>
       <div class="field"><label>A short introduction<textarea name="summary">${esc(value.summary)}</textarea></label></div>
@@ -706,9 +710,14 @@ function notesView() {
   `);
 }
 
-function face(user) {
-  if (user?.avatar) return `<img class="face" src="${esc(asset(user.avatar))}" alt="">`;
-  return `<span class="face-ph">${esc((user?.name || "L").trim().slice(0, 1) || "L")}</span>`;
+function face(user, options = {}) {
+  const picture = user?.avatar
+    ? `<img class="face" src="${esc(asset(user.avatar))}" alt="">`
+    : `<span class="face-ph">${esc((user?.name || "L").trim().slice(0, 1) || "L")}</span>`;
+  if (options.link === false || !user?.id) return picture;
+  const mine = state.user && String(user.id) === String(state.user.id);
+  const href = mine ? "#/profile" : `#/people/${encodeURIComponent(user.id)}`;
+  return `<a class="face-link" href="${href}" aria-label="${esc(user.name || "Profile")}">${picture}</a>`;
 }
 
 function iconPhoto() {
@@ -760,13 +769,17 @@ function commentCount(social) {
   return `<p class="empty">${count} ${count === 1 ? "comment" : "comments"}</p>`;
 }
 
-function reactBar(type, id, social) {
+function reactBar(type, id, social, kinds) {
   if (!state.user) return "";
+  const show = Array.isArray(kinds) ? kinds : ["like", "star"];
   const box = social || { likes: 0, stars: 0, liked: false, starred: false, comments: [] };
-  return `<div class="react">
-    <button type="button" class="react-btn ${box.liked ? "on" : ""}" data-action="react" data-kind="like" data-type="${esc(type)}" data-id="${esc(id)}">Like${box.likes ? ` ${box.likes}` : ""}</button>
-    <button type="button" class="react-btn ${box.starred ? "on" : ""}" data-action="react" data-kind="star" data-type="${esc(type)}" data-id="${esc(id)}">Star${box.stars ? ` ${box.stars}` : ""}</button>
-  </div>`;
+  const like = show.includes("like")
+    ? `<button type="button" class="react-btn ${box.liked ? "on" : ""}" data-action="react" data-kind="like" data-type="${esc(type)}" data-id="${esc(id)}">Like${box.likes ? ` ${box.likes}` : ""}</button>`
+    : "";
+  const star = show.includes("star")
+    ? `<button type="button" class="react-btn ${box.starred ? "on" : ""}" data-action="react" data-kind="star" data-type="${esc(type)}" data-id="${esc(id)}">Star${box.stars ? ` ${box.stars}` : ""}</button>`
+    : "";
+  return `<div class="react">${like}${star}</div>`;
 }
 
 function commentsBlock(type, id, social) {
@@ -856,6 +869,44 @@ function familyView() {
     <div class="stack">
       ${(state.people || []).map(personCard).join("") || `<p class="empty">No accounts yet.</p>`}
     </div>
+  `);
+}
+
+function peopleView(id) {
+  if (!state.user) return accountGate("Log in to see a profile.");
+  const cached = (state.people || []).find((item) => String(item.id) === String(id));
+  const shown = state.profile && String(state.profile.id) === String(id) ? { ...cached, ...state.profile } : cached;
+  if (state.profileFor !== String(id)) {
+    state.profileFor = String(id);
+    api(`/api/people/${encodeURIComponent(id)}`).then((data) => {
+      state.profile = data.person;
+      const list = state.people || [];
+      const index = list.findIndex((item) => String(item.id) === String(data.person.id));
+      if (index >= 0) list[index] = { ...list[index], ...data.person };
+      else state.people = [data.person, ...list];
+      if (route().name === "people" && String(route().id) === String(id)) render();
+    }).catch((error) => say(error.message));
+  }
+  if (!shown) return shell(`<nav class="crumbs" aria-label="Breadcrumb"><a href="#/">Home</a><span class="crumb-gap" aria-hidden="true">/</span><span aria-current="page">Profile</span></nav><p class="empty">Opening that profile…</p>`);
+  const self = String(shown.id) === String(state.user.id);
+  return shell(`
+    <nav class="crumbs" aria-label="Breadcrumb"><a href="#/">Home</a><span class="crumb-gap" aria-hidden="true">/</span><a href="#/family">Family</a><span class="crumb-gap" aria-hidden="true">/</span><span aria-current="page">${esc(shown.name)}</span></nav>
+    <h2 class="page-title">${esc(shown.name)}</h2>
+    <section class="panel">
+      <div class="profile-head">
+        ${shown.avatar ? `<img class="avatar" alt="" src="${esc(asset(shown.avatar))}">` : `<div class="avatar-ph">${esc(shown.name.slice(0, 1))}</div>`}
+        <div>
+          <p>${esc(shown.bio || "No bio yet.")}</p>
+          <p class="empty">${shown.followers || 0} follow ${esc(shown.name)}</p>
+        </div>
+      </div>
+      ${self
+        ? `<a class="btn quiet" href="#/profile">Edit your profile</a>`
+        : `<div class="actions">
+            <button class="btn ${shown.following ? "quiet" : ""}" type="button" data-action="follow" data-id="${esc(shown.id)}">${shown.following ? "Following" : "Follow"}</button>
+            ${reactBar("person", shown.id, shown.social, ["like"])}
+          </div>`}
+    </section>
   `);
 }
 
@@ -1004,7 +1055,7 @@ function accountForms() {
     <form id="register-form" class="panel">
       <h3>First time here?</h3>
       <p class="empty">Create an account. You only do this once.</p>
-      <div class="field"><label>Name<input name="name" value="Lisa Miller" required autocomplete="name"></label></div>
+      <div class="field"><label>Name<input name="name" required autocomplete="name" placeholder="Your name"></label></div>
       <div class="field"><label>Email<input name="email" type="email" required autocomplete="email"></label></div>
       <div class="field"><label>Password<span class="password-row"><input name="password" type="password" minlength="8" required autocomplete="new-password"><button class="btn quiet" type="button" data-action="toggle-password">Show password</button></span></label></div>
       <p class="empty">Use at least 8 characters.</p>
@@ -1063,6 +1114,10 @@ function render() {
   } else if (current.name === "studio") {
     document.title = "Studio · Lisa's Recipe Book";
     html = studio();
+  } else if (current.name === "people") {
+    const shown = (state.people || []).find((item) => String(item.id) === String(current.id)) || state.profile;
+    document.title = shown && String(shown.id) === String(current.id) ? `${shown.name} · Lisa's Recipe Book` : "Profile · Lisa's Recipe Book";
+    html = peopleView(current.id);
   } else if (current.name === "family") {
     document.title = "Family · Lisa's Recipe Book";
     html = familyView();
@@ -1341,6 +1396,10 @@ document.addEventListener("click", async (event) => {
         const was = person.following;
         person.following = result.following;
         person.followers = Math.max(0, (person.followers || 0) + (result.following && !was ? 1 : !result.following && was ? -1 : 0));
+      }
+      if (state.profile && String(state.profile.id) === String(button.dataset.id)) {
+        state.profile.following = result.following;
+        state.profile.followers = person ? person.followers : state.profile.followers;
       }
       render();
     }
@@ -1661,6 +1720,12 @@ function eachTarget(type, id, visit) {
   }
   for (const item of state.library) {
     if (type === "film" && String(item.id) === String(id)) item.social = visit(item.social);
+  }
+  for (const person of state.people || []) {
+    if (type === "person" && String(person.id) === String(id)) person.social = visit(person.social);
+  }
+  if (state.profile && type === "person" && String(state.profile.id) === String(id)) {
+    state.profile.social = visit(state.profile.social);
   }
 }
 
