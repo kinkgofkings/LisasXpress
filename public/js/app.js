@@ -172,7 +172,11 @@ async function api(path, options = {}) {
 
 function route() {
   const parts = (location.hash.replace(/^#/, "") || "/").split("/").filter(Boolean);
-  return { name: parts[0] || "home", id: decodeURIComponent(parts[1] || "") };
+  return {
+    name: parts[0] || "home",
+    id: decodeURIComponent(parts[1] || ""),
+    more: decodeURIComponent(parts.slice(2).join("/") || "")
+  };
 }
 
 function go(hash) { location.hash = hash; }
@@ -263,10 +267,20 @@ function shell(main) {
 
 function sectionOn(id) {
   const here = route().name;
-  if (id === "home") return here === "home" || here === "recipe";
-  if (id === "library") return here === "library" || here === "world";
+  const fromComments = here === "comments" ? commentSection(route().id) : "";
+  if (id === "home") return here === "home" || here === "recipe" || fromComments === "home";
+  if (id === "library") return here === "library" || here === "world" || fromComments === "library";
+  if (id === "notes") return here === "notes" || fromComments === "notes";
+  if (id === "studio") return here === "studio" || fromComments === "studio";
   if (id === "write") return here === "new" || here === "edit";
   return here === id;
+}
+
+function commentSection(type) {
+  if (type === "world") return "library";
+  if (type === "note") return "notes";
+  if (type === "film") return "studio";
+  return "home";
 }
 
 function appBar() {
@@ -757,6 +771,58 @@ function reactBar(type, id, social) {
 
 function commentsBlock(type, id, social) {
   const comments = Array.isArray(social?.comments) ? social.comments : [];
+  const latest = comments[comments.length - 1];
+  const line = latest ? `<div class="comments">${commentLine(latest)}</div>` : `<p class="empty">No comments yet.</p>`;
+  const href = `#/comments/${encodeURIComponent(type)}/${encodeURIComponent(id)}`;
+  return `<section class="comments-block"><h3>Latest comment</h3>${line}<a class="see-comments" href="${href}">See all comments</a></section>`;
+}
+
+function commentPlace(type, id) {
+  if (type === "recipe") {
+    const recipe = state.recipes.find((item) => item.id === id);
+    return {
+      title: recipe?.title || "This plate",
+      back: `#/recipe/${encodeURIComponent(id)}`,
+      backLabel: "Back to the recipe",
+      social: recipe?.social
+    };
+  }
+  if (type === "world") {
+    const mealId = String(id).replace(/^mealdb-/, "");
+    const recipe = state.worldCache[mealId];
+    const listed = [state.shelf, state.featured, state.bookHits].flat().find((meal) => meal && String(meal.id).replace(/^mealdb-/, "") === mealId);
+    return {
+      title: recipe?.title || listed?.title || "This plate",
+      back: `#/world/${encodeURIComponent(mealId)}`,
+      backLabel: "Back to the plate",
+      social: recipe?.social || listed?.social
+    };
+  }
+  if (type === "note") {
+    const note = state.notes.find((item) => String(item.id) === String(id));
+    const text = String(note?.body || note?.title || "This note").trim();
+    return {
+      title: text.slice(0, 80) || "This note",
+      back: "#/notes",
+      backLabel: "Back to the notepad",
+      social: note?.social
+    };
+  }
+  if (type === "film") {
+    const item = state.library.find((entry) => String(entry.id) === String(id));
+    return {
+      title: item?.title || "This film",
+      back: "#/studio",
+      backLabel: "Back to the studio",
+      social: item?.social
+    };
+  }
+  return { title: "Comments", back: "#/", backLabel: "Back to the book", social: null };
+}
+
+function commentsView(type, id) {
+  const place = commentPlace(type, id);
+  const comments = Array.isArray(place.social?.comments) ? place.social.comments : [];
   const list = comments.length
     ? `<div class="comments">${comments.map(commentLine).join("")}</div>`
     : `<p class="empty">No comments yet.</p>`;
@@ -766,7 +832,15 @@ function commentsBlock(type, id, social) {
         <button class="btn quiet" type="submit">Comment</button>
       </form>`
     : `<p class="empty"><a href="#/account">Log in</a> to leave a comment.</p>`;
-  return `<section class="comments-block"><h3>Comments</h3>${list}${form}</section>`;
+  return shell(`
+    <p><a class="see-comments" href="${esc(place.back)}">${esc(place.backLabel)}</a></p>
+    <h2 class="page-title">Comments</h2>
+    <p>${esc(place.title)}</p>
+    <section class="comments-page">
+      ${list}
+      ${form}
+    </section>
+  `);
 }
 
 function commentLine(comment) {
@@ -1001,6 +1075,14 @@ function render() {
   } else if (current.name === "search") {
     document.title = "Search · Lisa's Recipe Book";
     html = shell(searchView());
+  } else if (current.name === "comments") {
+    const place = commentPlace(current.id, current.more);
+    document.title = `Comments · ${place.title} · Lisa's Recipe Book`;
+    html = commentsView(current.id, current.more);
+    if (current.id === "world" && current.more && !state.worldCache[String(current.more).replace(/^mealdb-/, "")] && state.worldMiss !== String(current.more).replace(/^mealdb-/, "")) {
+      state.worldMiss = String(current.more).replace(/^mealdb-/, "");
+      ensureWorld(state.worldMiss);
+    }
   } else if (current.name === "privacy") {
     document.title = "Privacy · Lisa's Recipe Book";
     html = privacyView();

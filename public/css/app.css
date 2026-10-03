@@ -464,8 +464,10 @@ img { display: block; }
 .react-btn.on { background: var(--blush); color: var(--clay); border-color: var(--clay); }
 .comment-form { display: flex; gap: 8px; width: 100%; min-width: 0; }
 .comment-form input { flex: 1; min-width: 0; }
-.comments-block { margin-top: 22px; display: grid; gap: 10px; }
-.comments-block h3 { margin: 0; font-size: 28px; }
+.comments-block { margin-top: 14px; display: grid; gap: 8px; }
+.comments-block h3 { margin: 0; font-family: var(--sans); font-size: 15px; font-weight: 650; letter-spacing: 0; }
+.see-comments { font-size: 14px; color: var(--clay); text-decoration: underline; text-underline-offset: 3px; justify-self: start; }
+.comments-page { display: grid; gap: 14px; margin-top: 8px; }
 .comments { width: 100%; display: grid; gap: 8px; }
 .comment { display: flex; gap: 8px; align-items: flex-start; margin: 0; }
 .person { display: flex; gap: 14px; align-items: center; }
