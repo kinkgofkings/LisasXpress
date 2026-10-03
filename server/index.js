@@ -6,6 +6,7 @@ import path from "node:path";
 import crypto from "node:crypto";
 import { db, seedIfEmpty, recipeRow } from "./db.js";
 import { browse } from "./browse.js";
+import { worldCatalog, worldRecipe } from "./world.js";
 import { hashPassword, checkPassword, signToken, readToken, publicUser } from "./auth.js";
 
 const app = express();
@@ -48,7 +49,7 @@ const storage = multer.diskStorage({
   destination: uploadDir,
   filename(_req, file, cb) {
     const ext = path.extname(file.originalname || "").toLowerCase().slice(0, 8);
-    const safe = [".jpg", ".jpeg", ".png", ".webp", ".gif", ".mp4", ".webm", ".mov"].includes(ext) ? ext : "";
+    const safe = [".jpg", ".jpeg", ".png", ".webp", ".gif", ".mp4", ".webm", ".mov", ".pdf", ".txt"].includes(ext) ? ext : "";
     cb(null, `${Date.now()}-${crypto.randomBytes(4).toString("hex")}${safe}`);
   }
 });
@@ -64,11 +65,26 @@ function fileFilter(kind) {
 
 const imageUpload = multer({ storage, limits: { fileSize: 8 * 1024 * 1024 }, fileFilter: fileFilter("image") });
 const videoUpload = multer({ storage, limits: { fileSize: 80 * 1024 * 1024 }, fileFilter: fileFilter("video") });
+const noteUpload = multer({
+  storage,
+  limits: { fileSize: 8 * 1024 * 1024, files: 6 },
+  fileFilter(_req, file, cb) {
+    const ok = /^(image\/(jpeg|png|webp|gif)|video\/(mp4|webm|quicktime)|application\/pdf|text\/plain)$/.test(file.mimetype);
+    cb(ok ? null : new Error("Use a picture, a short video, a PDF, or a text file."), ok);
+  }
+});
 
 function removeUpload(filePath) {
   if (!filePath?.startsWith("/uploads/")) return;
   const full = path.join(root, filePath);
   if (full.startsWith(uploadDir)) fs.rmSync(full, { force: true });
+}
+
+function publicNote(row) {
+  let attachments = [];
+  try { attachments = JSON.parse(row.attachments || "[]"); } catch { /* an old note has no files */ }
+  if (!Array.isArray(attachments)) attachments = [];
+  return { id: row.id, title: row.title, body: row.body, attachments, updatedAt: row.updatedAt };
 }
 
 function slugify(title) {
@@ -81,6 +97,11 @@ function slugify(title) {
 
 function lines(value) {
   return String(value || "").split("\n").map((line) => line.trim()).filter(Boolean);
+}
+
+function cuisineOf(value) {
+  if (value === "cajun" || value === "library") return value;
+  return "texas";
 }
 
 app.get("/api/health", (_req, res) => {
@@ -184,7 +205,7 @@ app.post("/api/recipes", (req, res) => {
   `).run(
     id,
     title,
-    req.body.cuisine === "cajun" ? "cajun" : "texas",
+    cuisineOf(req.body.cuisine),
     String(req.body.category || "Mains").slice(0, 40),
     String(req.body.summary || "").slice(0, 600),
     String(req.body.yieldText || "A family plate").slice(0, 80),
@@ -221,7 +242,7 @@ app.patch("/api/recipes/:id", (req, res) => {
     WHERE id=?
   `).run(
     title,
-    (req.body.cuisine ?? existing.cuisine) === "cajun" ? "cajun" : "texas",
+    cuisineOf(req.body.cuisine ?? existing.cuisine),
     String(req.body.category ?? existing.category).slice(0, 40),
     String(req.body.summary ?? existing.summary).slice(0, 600),
     String(req.body.yieldText ?? existing.yield_text).slice(0, 80),
@@ -283,18 +304,29 @@ app.delete("/api/recipes/:id/media/:mediaId", (req, res) => {
 app.get("/api/notes", (req, res) => {
   const user = requireUser(req, res);
   if (!user) return;
-  const notes = db.prepare("SELECT id, title, body, updated_at AS updatedAt FROM notes WHERE user_id = ? ORDER BY updated_at DESC").all(user.id);
-  res.json({ notes });
+  const notes = db.prepare("SELECT id, title, body, attachments, updated_at AS updatedAt FROM notes WHERE user_id = ? ORDER BY updated_at DESC").all(user.id);
+  res.json({ notes: notes.map(publicNote) });
 });
 
 app.post("/api/notes", (req, res) => {
-  const user = requireUser(req, res);
-  if (!user) return;
-  const title = String(req.body.title || "Untitled note").trim().slice(0, 120);
-  const body = String(req.body.body || "").slice(0, 20000);
-  const now = new Date().toISOString();
-  const result = db.prepare("INSERT INTO notes (user_id, title, body, updated_at) VALUES (?, ?, ?, ?)").run(user.id, title, body, now);
-  res.status(201).json({ note: { id: result.lastInsertRowid, title, body, updatedAt: now } });
+  noteUpload.array("file", 6)(req, res, (error) => {
+    if (error) return res.status(400).json({ error: error.message || "That file could not be saved." });
+    const user = requireUser(req, res);
+    if (!user) return;
+    const text = String(req.body.body || "").slice(0, 20000);
+    const attachments = (req.files || []).map((file) => ({
+      path: `/uploads/${file.filename}`,
+      mime: file.mimetype,
+      name: String(file.originalname || "File").replace(/[^\w.\- ]+/g, "").slice(0, 80) || "File",
+      kind: file.mimetype.startsWith("image/") ? "image" : file.mimetype.startsWith("video/") ? "video" : "file"
+    }));
+    if (!text.trim() && !attachments.length) return res.status(400).json({ error: "Write a note, or add a picture." });
+    const line = text.trim().split(/\n/)[0].slice(0, 80);
+    const title = line || (attachments[0]?.kind === "video" ? "Video" : attachments[0]?.kind === "file" ? "File" : "Photo");
+    const now = new Date().toISOString();
+    const result = db.prepare("INSERT INTO notes (user_id, title, body, attachments, updated_at) VALUES (?, ?, ?, ?, ?)").run(user.id, title, text, JSON.stringify(attachments), now);
+    res.status(201).json({ note: { id: result.lastInsertRowid, title, body: text, attachments, updatedAt: now } });
+  });
 });
 
 app.patch("/api/notes/:id", (req, res) => {
@@ -312,6 +344,12 @@ app.patch("/api/notes/:id", (req, res) => {
 app.delete("/api/notes/:id", (req, res) => {
   const user = requireUser(req, res);
   if (!user) return;
+  const note = db.prepare("SELECT attachments FROM notes WHERE id = ? AND user_id = ?").get(req.params.id, user.id);
+  if (note?.attachments) {
+    let files = [];
+    try { files = JSON.parse(note.attachments); } catch { /* nothing to remove */ }
+    if (Array.isArray(files)) files.forEach((file) => removeUpload(file?.path));
+  }
   db.prepare("DELETE FROM notes WHERE id = ? AND user_id = ?").run(req.params.id, user.id);
   res.json({ ok: true });
 });
@@ -371,6 +409,22 @@ function saveLibrary(req, res, err, kind) {
   });
 }
 
+app.patch("/api/library/:id", (req, res) => {
+  const user = requireUser(req, res);
+  if (!user) return;
+  const item = db.prepare("SELECT * FROM library_items WHERE id = ? AND user_id = ?").get(req.params.id, user.id);
+  if (!item) return res.status(404).json({ error: "That one is not yours." });
+  const title = String(req.body.title ?? item.title).trim().slice(0, 160);
+  if (!title) return res.status(400).json({ error: "Give it a title." });
+  const link = String(req.body.url ?? item.url).trim();
+  if (item.kind !== "film" && !/^https?:\/\//.test(link)) return res.status(400).json({ error: "Paste the full link, starting with http." });
+  const description = String(req.body.description ?? item.description).slice(0, 5000);
+  const notes = String(req.body.notes ?? item.notes).slice(0, 2000);
+  const url = item.kind === "film" ? item.url : link;
+  db.prepare("UPDATE library_items SET title = ?, url = ?, description = ?, notes = ? WHERE id = ?").run(title, url, description, notes, item.id);
+  res.json({ item: { id: item.id, kind: item.kind, title, url, description, notes, filePath: item.file_path, createdAt: item.created_at } });
+});
+
 app.delete("/api/library/:id", (req, res) => {
   const user = requireUser(req, res);
   if (!user) return;
@@ -378,6 +432,60 @@ app.delete("/api/library/:id", (req, res) => {
   if (item) removeUpload(item.file_path);
   db.prepare("DELETE FROM library_items WHERE id = ? AND user_id = ?").run(req.params.id, user.id);
   res.json({ ok: true });
+});
+
+app.get("/api/world", async (req, res) => {
+  try {
+    res.json(await worldCatalog({ q: req.query.q, category: req.query.category }));
+  } catch (error) {
+    res.status(error.status || 502).json({ error: error.message || "The recipe library could not be reached." });
+  }
+});
+
+app.get("/api/world/:id", async (req, res) => {
+  try {
+    res.json({ recipe: await worldRecipe(req.params.id) });
+  } catch (error) {
+    res.status(error.status || 502).json({ error: error.message || "The recipe library could not be reached." });
+  }
+});
+
+app.post("/api/world/:id/keep", async (req, res) => {
+  if (!requireUser(req, res)) return;
+  try {
+    const recipe = await worldRecipe(req.params.id);
+    const existing = db.prepare("SELECT id FROM recipes WHERE source_url = ?").get(recipe.sourceUrl);
+    if (existing) {
+      return res.json({ recipe: recipeRow(db.prepare("SELECT * FROM recipes WHERE id = ?").get(existing.id)) });
+    }
+    const now = new Date().toISOString();
+    const id = slugify(recipe.title);
+    db.prepare(`
+      INSERT INTO recipes (
+        id, title, cuisine, category, summary, yield_text, prep_minutes, cook_minutes,
+        ingredients, steps, notes, image, image_credit, source_url, source_title, family,
+        created_at, updated_at
+      ) VALUES (?, ?, 'library', ?, ?, ?, 0, 0, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
+    `).run(
+      id,
+      recipe.title,
+      recipe.category,
+      recipe.summary,
+      recipe.yieldText,
+      JSON.stringify(recipe.ingredients),
+      JSON.stringify(recipe.steps),
+      recipe.notes,
+      recipe.image,
+      recipe.imageCredit,
+      recipe.sourceUrl,
+      recipe.sourceTitle,
+      now,
+      now
+    );
+    res.status(201).json({ recipe: recipeRow(db.prepare("SELECT * FROM recipes WHERE id = ?").get(id)) });
+  } catch (error) {
+    res.status(error.status || 502).json({ error: error.message || "That plate could not be kept." });
+  }
 });
 
 app.get("/api/browse", async (req, res) => {

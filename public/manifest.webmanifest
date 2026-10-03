@@ -1,0 +1,15 @@
+{
+  "name": "Lisa's Recipe Book",
+  "short_name": "Lisa's Book",
+  "description": "Cajun and Texas recipes for Lisa Miller.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#fff4f8",
+  "theme_color": "#d81b60",
+  "icons": [
+    { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

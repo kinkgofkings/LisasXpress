@@ -1,6 +1,7 @@
 node_modules/
 data/*.db
 data/*.db-*
+data/*.sql
 data/secret
 public/uploads/*
 !public/uploads/.gitkeep

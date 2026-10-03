@@ -49,6 +49,7 @@ db.exec(`
     user_id INTEGER NOT NULL,
     title TEXT NOT NULL,
     body TEXT NOT NULL DEFAULT '',
+    attachments TEXT NOT NULL DEFAULT '[]',
     updated_at TEXT NOT NULL
   );
   CREATE TABLE IF NOT EXISTS library_items (
@@ -63,6 +64,10 @@ db.exec(`
     created_at TEXT NOT NULL
   );
 `);
+
+try {
+  db.exec("ALTER TABLE notes ADD COLUMN attachments TEXT NOT NULL DEFAULT '[]'");
+} catch { /* the column is already there */ }
 
 export function seedIfEmpty() {
   const row = db.prepare("SELECT COUNT(*) AS count FROM recipes").get();
