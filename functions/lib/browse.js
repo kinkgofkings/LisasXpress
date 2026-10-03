@@ -92,3 +92,100 @@ export async function browse(raw) {
     : "<p>This page had no readable text.</p>";
   return { url: current.href, title, html: page };
 }
+
+function decodeEntities(value) {
+  return String(value || "")
+    .replace(/&amp;/g, "&")
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&#x([0-9a-f]+);/gi, (_, hex) => String.fromCodePoint(parseInt(hex, 16)))
+    .replace(/&#(\d+);/g, (_, num) => String.fromCodePoint(Number(num)));
+}
+
+function metaContent(html, property) {
+  const name = property.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const forward = new RegExp(`<meta[^>]+(?:property|name)=["']${name}["'][^>]*content=["']([^"']*)["']`, "i");
+  const reverse = new RegExp(`<meta[^>]+content=["']([^"']*)["'][^>]*(?:property|name)=["']${name}["']`, "i");
+  return decodeEntities(html.match(forward)?.[1] || html.match(reverse)?.[1] || "");
+}
+
+async function followPublic(start, headers) {
+  let current = start;
+  let response;
+  for (let hop = 0; hop < 5; hop += 1) {
+    response = await fetch(current.href, { redirect: "manual", headers });
+    if (![301, 302, 303, 307, 308].includes(response.status)) return { response, current };
+    const location = response.headers.get("location");
+    if (!location) return { response, current };
+    current = publicUrl(new URL(location, current).href);
+  }
+  throw fail("That link kept redirecting.", 502);
+}
+
+async function watchTikTok(start) {
+  const { current } = await followPublic(start, { "User-Agent": "Mozilla/5.0", Accept: "text/html" });
+  const oembed = await fetch(`https://www.tiktok.com/oembed?url=${encodeURIComponent(current.href)}`, {
+    headers: { "User-Agent": "Mozilla/5.0", Accept: "application/json" }
+  });
+  if (!oembed.ok) throw fail("TikTok did not share that video. It may be private.", 502);
+  const data = await oembed.json();
+  const html = String(data.html || "");
+  const videoId = html.match(/data-video-id="(\d+)"/)?.[1] || current.pathname.match(/\/video\/(\d+)/)?.[1] || "";
+  if (!videoId) throw fail("That TikTok link did not include a video.", 404);
+  return {
+    provider: "tiktok",
+    videoId,
+    url: html.match(/cite="([^"]+)"/)?.[1] || current.href,
+    title: String(data.title || "").slice(0, 180),
+    author: String(data.author_name || "").slice(0, 80),
+    thumbnail: String(data.thumbnail_url || "")
+  };
+}
+
+async function watchFacebook(start) {
+  let response;
+  let current;
+  try {
+    ({ response, current } = await followPublic(start, {
+      "User-Agent": "facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)",
+      Accept: "text/html"
+    }));
+  if (!response?.ok) throw fail("Facebook did not open that link. It may be private.", 502);
+  const html = (await response.text()).slice(0, 400000);
+  const canonical = metaContent(html, "og:url") || current.href.split("?")[0];
+  let page = current;
+  try { page = publicUrl(canonical); } catch { /* keep the opened address */ }
+  const videoHref = html.match(/https:\/\/www\.facebook\.com\/[^"'\\\s]+\/videos\/\d+/)?.[0] || page.href;
+  const plugin = `https://www.facebook.com/plugins/video.php?href=${encodeURIComponent(videoHref)}&show_text=false&width=500`;
+  const pluginPage = await fetch(plugin, { headers: { "User-Agent": "Mozilla/5.0", Accept: "text/html" } });
+  const pluginHtml = pluginPage.ok ? (await pluginPage.text()).slice(0, 80000) : "";
+  const blocked = /can(?:'|&#0*39;)t be embedded|content owned by someone else/i.test(pluginHtml);
+  const clip = {
+    provider: "facebook",
+    url: page.href,
+    title: metaContent(html, "og:title").slice(0, 180),
+    thumbnail: metaContent(html, "og:image")
+  };
+  if (blocked || !pluginPage.ok) {
+    return {
+      ...clip,
+      embeddable: false,
+      reason: "Facebook will not play this video inside the book. It uses music or pictures that belong to someone else. Open it on Facebook to watch it."
+    };
+  }
+  return { ...clip, embeddable: true, frame: plugin };
+  } catch (error) {
+    if (error.status) throw error;
+    throw fail("Facebook did not open that link. It may be private.", 502);
+  }
+}
+
+export async function watchClip(raw) {
+  const start = publicUrl(raw);
+  const host = start.hostname.replace(/^www\./, "");
+  if (host.endsWith("tiktok.com")) return watchTikTok(start);
+  if (host.endsWith("facebook.com") || host === "fb.watch") return watchFacebook(start);
+  throw fail("That link is not a video the book can play.", 400);
+}

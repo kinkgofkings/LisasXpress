@@ -28,7 +28,8 @@ const state = {
   noteFiles: [],
   editingNote: "",
   filmDraft: { title: "", description: "" },
-  libraryEdit: ""
+  libraryEdit: "",
+  previews: {}
 };
 const timer = { endAt: 0, pausedRemaining: 0, running: false, handle: null, alerted: false };
 let deferredInstall = null;
@@ -454,6 +455,7 @@ function notePost(note) {
       </div>
     </header>
     ${note.body ? `<p>${esc(note.body)}</p>` : ""}
+    ${tiktokFrom(note.body)}
     ${media ? `<div class="post-media ${visual.length > 1 ? "many" : "one"}">${media}</div>` : ""}
     ${chips ? `<div class="file-row">${chips}</div>` : ""}
   </article>`;
@@ -535,6 +537,8 @@ function libraryCard(item) {
       <div class="actions"><button class="btn" type="submit">Save changes</button><button class="btn quiet" type="button" data-action="cancel-library-edit">Cancel</button></div>
     </form>` : `<h3>${esc(item.title)}</h3>`}
     ${item.filePath ? `<video src="${esc(asset(item.filePath))}" controls playsinline></video>` : ""}
+    ${tiktokLink(item.url) ? tiktokPlayer(item.url, item.title) : ""}
+    ${facebookLink(item.url) ? facebookPlayer(item.url, item.title) : ""}
     ${id ? `<iframe class="frame" src="https://www.youtube-nocookie.com/embed/${esc(id)}" allowfullscreen></iframe>` : ""}
     ${!editing && item.notes ? `<p>${esc(item.notes)}</p>` : ""}
     ${!editing && item.description ? `<p>${esc(item.description)}</p>` : ""}
@@ -661,6 +665,7 @@ function render() {
     preview.play?.().catch(() => {});
   }
   paintInstall();
+  mountTikToks();
 }
 
 async function openSource(url, title, from) {
@@ -669,6 +674,22 @@ async function openSource(url, title, from) {
     state.reader.fromTitle = from.title;
     state.reader.fromId = from.id;
     state.reader.stack = [];
+  }
+  if (isTikTok(url) || isFacebook(url)) {
+    state.reader.loading = true;
+    render();
+    try {
+      const clip = isTikTok(url) ? await loadTikTok(url) : await loadFacebook(url);
+      const html = isTikTok(url) ? tiktokBlock(clip) : facebookBlock(clip);
+      state.reader.loading = false;
+      state.reader.stack.push({ title: clip.title || title || "Video", url: clip.url || url, html });
+      render();
+    } catch (error) {
+      state.reader.loading = false;
+      state.reader = null;
+      say(error.message);
+    }
+    return;
   }
   const watch = watchPage(url, title);
   if (watch) {
@@ -700,18 +721,137 @@ function watchPage(url, title) {
   if (host === "youtu.be" || host.endsWith("youtube.com")) {
     return { title: name, url, html: "<p>That YouTube link did not include a video.</p>" };
   }
-  const tiktok = String(url).match(/\/video\/(\d+)/);
-  if (host.endsWith("tiktok.com") && tiktok) {
-    return { title: name, url, html: watchFrame(`https://www.tiktok.com/embed/v2/${tiktok[1]}`, name) };
-  }
-  if (host.endsWith("facebook.com") || host === "fb.watch") {
-    return { title: name, url, html: watchFrame(`https://www.facebook.com/plugins/video.php?href=${encodeURIComponent(url)}&show_text=false`, name) };
-  }
   return null;
 }
 
 function watchFrame(src, title) {
   return `<div class="watch"><iframe src="${esc(src)}" title="${esc(title)}" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; fullscreen" allowfullscreen></iframe></div>`;
+}
+
+function isFacebook(url) {
+  try {
+    const host = new URL(url).hostname.replace(/^www\./, "");
+    return host.endsWith("facebook.com") || host === "fb.watch";
+  } catch {
+    return false;
+  }
+}
+
+function facebookLink(url) {
+  return isFacebook(url);
+}
+
+function facebookPlayer(url, title) {
+  const preview = state.previews[url];
+  if (!preview || preview.pending) {
+    ensurePreview(url);
+    return `<p class="empty">Finding that Facebook video…</p>`;
+  }
+  if (preview.error) return `<p class="empty">${esc(preview.error)}</p>`;
+  return facebookBlock({ ...preview, title: preview.title || title });
+}
+
+function facebookBlock(clip) {
+  if (clip?.embeddable && clip.frame) return watchFrame(clip.frame, clip.title || "Facebook");
+  const picture = clip?.thumbnail
+    ? `<img class="fb-thumb" src="${esc(clip.thumbnail)}" alt="" referrerpolicy="no-referrer">`
+    : "";
+  const note = clip?.reason || "Facebook will not play this video inside the book. Open it on Facebook to watch it.";
+  const href = clip?.url || "";
+  return `<div class="fb-hold">${picture}<p>${esc(note)}</p>${href ? `<a class="btn" href="${esc(href)}" target="_blank" rel="noopener">Watch on Facebook</a>` : ""}</div>`;
+}
+
+async function loadFacebook(url) {
+  const saved = state.previews[url];
+  if (saved?.provider === "facebook") return saved;
+  const data = await api(`/api/watch?url=${encodeURIComponent(url)}`);
+  state.previews[url] = data;
+  return data;
+}
+
+function isTikTok(url) {
+  try {
+    return new URL(url).hostname.replace(/^www\./, "").endsWith("tiktok.com");
+  } catch {
+    return false;
+  }
+}
+
+function tiktokFrom(text) {
+  const url = String(text || "").match(/https?:\/\/(?:[\w-]+\.)?tiktok\.com\/[^\s)]+/i)?.[0]?.replace(/[.,)]+$/, "");
+  return url ? tiktokPlayer(url, "TikTok") : "";
+}
+
+function tiktokLink(url) {
+  return isTikTok(url);
+}
+
+function tiktokPlayer(url, title) {
+  const localId = String(url || "").match(/\/video\/(\d+)/)?.[1] || "";
+  const preview = state.previews[url];
+  const videoId = localId || preview?.videoId || "";
+  if (!videoId) {
+    if (!preview) ensurePreview(url);
+    if (preview?.thumbnail) {
+      return `<div class="tiktok-hold"><img class="tiktok-thumb" src="${esc(preview.thumbnail)}" alt="${esc(title || "TikTok")}"></div>`;
+    }
+    return `<p class="empty">${esc(preview?.error || "Finding that TikTok…")}</p>`;
+  }
+  const cite = preview?.url || url;
+  return tiktokBlock({ videoId, url: cite, author: preview?.author, title });
+}
+
+function tiktokBlock(clip) {
+  if (!clip?.videoId) return `<p class="empty">${esc(clip?.error || "That TikTok could not be opened.")}</p>`;
+  const cite = clip.url;
+  const label = clip.author ? `@${clip.author}` : (clip.title || "Watch on TikTok");
+  return `<div class="tiktok-hold"><blockquote class="tiktok-embed" cite="${esc(cite)}" data-video-id="${esc(clip.videoId)}" style="max-width:100%;min-width:0"><section><a href="${esc(cite)}" target="_blank" rel="noopener">${esc(label)}</a></section></blockquote></div>`;
+}
+
+async function loadTikTok(url) {
+  const saved = state.previews[url];
+  if (saved?.videoId) return saved;
+  const localId = String(url).match(/\/video\/(\d+)/)?.[1] || "";
+  if (localId) {
+    const clip = { videoId: localId, url, title: "", author: "" };
+    state.previews[url] = clip;
+    return clip;
+  }
+  const data = await api(`/api/watch?url=${encodeURIComponent(url)}`);
+  state.previews[url] = data;
+  return data;
+}
+
+function ensurePreview(url) {
+  if (state.previews[url]) return;
+  state.previews[url] = { pending: true };
+  api(`/api/watch?url=${encodeURIComponent(url)}`)
+    .then((data) => { state.previews[url] = data; render(); })
+    .catch((error) => { state.previews[url] = { error: error.message }; render(); });
+}
+
+function mountTikToks() {
+  const nodes = [...document.querySelectorAll(".tiktok-embed:not([data-mounted])")];
+  if (!nodes.length) return;
+  const paint = (node) => {
+    node.dataset.mounted = "1";
+    window.tiktokEmbed?.lib?.render?.(node);
+  };
+  if (window.tiktokEmbed?.lib?.render) {
+    nodes.forEach(paint);
+    return;
+  }
+  if (window.__tiktokLoading) return;
+  window.__tiktokLoading = true;
+  const script = document.createElement("script");
+  script.src = "https://www.tiktok.com/embed.js";
+  script.async = true;
+  script.onload = () => {
+    window.__tiktokLoading = false;
+    document.querySelectorAll(".tiktok-embed:not([data-mounted])").forEach(paint);
+  };
+  script.onerror = () => { window.__tiktokLoading = false; };
+  document.body.appendChild(script);
 }
 
 async function refreshPrivate() {
@@ -724,6 +864,7 @@ async function refreshPrivate() {
 document.addEventListener("click", async (event) => {
   const link = event.target.closest("#reader-body a");
   if (link) {
+    if (link.closest(".tiktok-hold, .fb-hold")) return;
     event.preventDefault();
     const href = link.getAttribute("href");
     if (href && href.startsWith("http")) await openSource(href, link.textContent);

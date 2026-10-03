@@ -5,7 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
 import { db, seedIfEmpty, recipeRow } from "./db.js";
-import { browse } from "./browse.js";
+import { browse, watchClip } from "./browse.js";
 import { worldCatalog, worldRecipe } from "./world.js";
 import { hashPassword, checkPassword, signToken, readToken, publicUser } from "./auth.js";
 
@@ -485,6 +485,14 @@ app.post("/api/world/:id/keep", async (req, res) => {
     res.status(201).json({ recipe: recipeRow(db.prepare("SELECT * FROM recipes WHERE id = ?").get(id)) });
   } catch (error) {
     res.status(error.status || 502).json({ error: error.message || "That plate could not be kept." });
+  }
+});
+
+app.get("/api/watch", async (req, res) => {
+  try {
+    res.json(await watchClip(String(req.query.url || "")));
+  } catch (error) {
+    res.status(error.status || 502).json({ error: error.message || "That video could not be opened." });
   }
 });
 

@@ -1,5 +1,5 @@
 import { worldCatalog, worldRecipe } from "../../server/world.js";
-import { browse } from "./browse.js";
+import { browse, watchClip } from "./browse.js";
 
 function json(data, status = 200) {
   return Response.json(data, { status });
@@ -174,6 +174,7 @@ async function storePicture(request, env, field) {
 
 async function removeStored(env, path) {
   if (!path?.startsWith("/uploads/")) return;
+  await env.DB.prepare("DELETE FROM file_parts WHERE path = ?").bind(path).run();
   await env.DB.prepare("DELETE FROM files WHERE path = ?").bind(path).run();
 }
 
@@ -258,6 +259,7 @@ async function route(request, env, url, parts) {
   if (first === "world" && third === "keep" && method === "POST") return worldKeep(request, env, second);
 
   if (first === "browse" && method === "GET") return openBrowse(url);
+  if (first === "watch" && method === "GET") return watchLink(url);
 
   return json({ error: "That page is not in the book." }, 404);
 }
@@ -695,6 +697,14 @@ async function worldKeep(request, env, mealId) {
     return json({ recipe: await recipeRow(env, await env.DB.prepare("SELECT * FROM recipes WHERE id = ?").bind(id).first()) }, 201);
   } catch (error) {
     return json({ error: error.message || "That plate could not be kept." }, error.status || 502);
+  }
+}
+
+async function watchLink(requestUrl) {
+  try {
+    return json(await watchClip(String(requestUrl.searchParams.get("url") || "")));
+  } catch (error) {
+    return json({ error: error.message || "That video could not be opened." }, error.status || 502);
   }
 }
 
