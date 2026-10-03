@@ -452,6 +452,15 @@ img { display: block; }
 .fb-hold p { margin: 0; }
 .fb-hold .btn { justify-self: start; }
 .empty { color: var(--muted); }
+.react { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 12px; }
+.react-btn { border-radius: 999px; border: 1px solid var(--line); background: white; color: var(--ink); padding: 6px 12px; }
+.react-btn.on { background: var(--blush); color: var(--clay); border-color: var(--clay); }
+.comment-form { display: flex; gap: 8px; width: 100%; min-width: 0; }
+.comment-form input { flex: 1; min-width: 0; }
+.comments { width: 100%; display: grid; gap: 8px; }
+.comment { display: flex; gap: 8px; align-items: flex-start; margin: 0; }
+.person { display: flex; gap: 14px; align-items: center; }
+.person h3 { margin: 0; }
 
 @media (max-width: 860px) {
   .hero, .recipe, .layout, .split { grid-template-columns: 1fr; }

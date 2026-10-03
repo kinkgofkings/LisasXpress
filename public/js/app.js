@@ -29,6 +29,7 @@ const state = {
   editingNote: "",
   filmDraft: { title: "", description: "" },
   libraryEdit: "",
+  people: [],
   previews: {}
 };
 const timer = { endAt: 0, pausedRemaining: 0, running: false, handle: null, alerted: false };
@@ -153,7 +154,7 @@ function installedAlready() {
 
 function shell(main) {
   const here = route().name;
-  const links = [["home", "Book"], ["library", "Library"], ["notes", "Notepad"], ["studio", "Studio"], ["profile", "Profile"]];
+  const links = [["home", "Book"], ["library", "Library"], ["notes", "Notepad"], ["studio", "Studio"], ["family", "Family"], ["profile", "Profile"]];
   const avatar = state.user?.avatar
     ? `<img class="avatar" alt="" src="${esc(asset(state.user.avatar))}" style="width:36px;height:36px">`
     : "";
@@ -282,6 +283,8 @@ function card(recipe) {
       <div class="kicker">${esc(cuisineLabel(recipe.cuisine))} · ${esc(recipe.category)}${recipe.family ? `<span class="badge">Tex's kitchen</span>` : ""}</div>
       <h2>${esc(recipe.title)}</h2>
       <p>${esc(recipe.summary)}</p>
+      ${recipe.author ? `<p class="empty">From ${esc(recipe.author.name)}</p>` : ""}
+      ${reactBar("recipe", recipe.id, recipe.social, false)}
     </div>
   </a>`;
 }
@@ -303,7 +306,7 @@ function recipeView(recipe) {
         </div>
       </div>
       <div>
-        <p class="kicker">${recipe.world ? "Library" : esc(cuisineLabel(recipe.cuisine))} · ${esc(recipe.category)}${recipe.family ? `<span class="badge">Tex's kitchen</span>` : ""}</p>
+        <p class="kicker">${recipe.world ? "Library" : esc(cuisineLabel(recipe.cuisine))} · ${esc(recipe.category)}${recipe.author ? ` · ${esc(recipe.author.name)}` : ""}${recipe.family ? `<span class="badge">Tex's kitchen</span>` : ""}</p>
         <h2 class="page-title" style="font-size:clamp(36px,5vw,58px)">${esc(recipe.title)}</h2>
         <p>${esc(recipe.summary)}</p>
         <div class="meta">
@@ -325,7 +328,9 @@ function recipeView(recipe) {
                 ? `<button class="btn" data-action="keep-recipe" data-id="${esc(recipe.mealId)}">Keep in the book</button>`
                 : `<a class="btn" href="#/account">Log in to keep this</a>`))
             : (state.user
-              ? `<a class="btn quiet" href="#/edit/${recipe.id}">Edit</a><button class="btn danger" data-action="delete-recipe" data-id="${recipe.id}">Delete</button>`
+              ? ((!recipe.author || String(recipe.author.id) === String(state.user.id))
+                ? `<a class="btn quiet" href="#/edit/${recipe.id}">Edit</a><button class="btn danger" data-action="delete-recipe" data-id="${recipe.id}">Delete</button>`
+                : "")
               : `<a class="btn quiet" href="#/account">Log in to edit</a>`)}
         </div>
         <div class="share-box no-print timer">
@@ -335,6 +340,7 @@ function recipeView(recipe) {
           <button class="btn quiet" data-action="timer-reset">Reset</button>
         </div>
         ${youtubeId(recipe.youtube) ? `<div class="watch"><iframe src="https://www.youtube-nocookie.com/embed/${esc(youtubeId(recipe.youtube))}?rel=0&playsinline=1" title="${esc(recipe.title)}" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; fullscreen" allowfullscreen></iframe></div>` : ""}
+        ${reactBar("recipe", recipe.id, recipe.social, true)}
         <h3>Ingredients</h3>
         <ul>${recipe.ingredients.map((item) => `<li>${esc(item)}</li>`).join("")}</ul>
         <h3>Method</h3>
@@ -403,7 +409,7 @@ function libraryView() {
 }
 
 function notesView() {
-  if (!state.user) return accountGate("Log in to open your notepad.");
+  if (!state.user) return accountGate("Log in to see the family's notes.");
   const picks = state.noteFiles.map((item) => `<div class="pick">
     ${item.kind === "image" ? `<img src="${esc(item.url)}" alt="">` : item.kind === "video" ? `<video src="${esc(item.url)}" muted></video>` : `<span class="file-chip">${esc(item.name)}</span>`}
     <button type="button" class="pick-x" data-action="drop-file" data-id="${esc(item.id)}" aria-label="Remove ${esc(item.name)}">×</button>
@@ -414,7 +420,7 @@ function notesView() {
       <form id="note-form" class="composer">
         <div class="composer-row">
           ${face(state.user)}
-          <textarea id="note-body" name="body" rows="3" placeholder="Write a note…">${esc(state.noteDraft)}</textarea>
+          <textarea id="note-body" name="body" rows="3" placeholder="Share a note with the family…">${esc(state.noteDraft)}</textarea>
         </div>
         ${picks ? `<div class="picks">${picks}</div>` : ""}
         <div class="composer-tools">
@@ -428,7 +434,7 @@ function notesView() {
         <input id="note-pick-video" data-note-pick="video" type="file" accept="video/mp4,video/webm,video/quicktime" hidden>
         <input id="note-pick-file" data-note-pick="file" type="file" accept="application/pdf,text/plain,.pdf,.txt" multiple hidden>
       </form>
-      ${state.notes.map(notePost).join("") || `<p class="empty composer-empty">Your notes will show up here.</p>`}
+      ${state.notes.map(notePost).join("") || `<p class="empty composer-empty">Family notes will show up here.</p>`}
     </div>
   `);
 }
@@ -458,21 +464,68 @@ function notePost(note) {
     ? `<video src="${esc(asset(item.path))}" controls playsinline></video>`
     : `<img src="${esc(asset(item.path))}" alt="">`).join("");
   const chips = docs.map((item) => `<a class="file-chip" href="${esc(asset(item.path))}" download="${esc(item.name || "file")}">${iconFile()}<span>${esc(item.name || "File")}</span></a>`).join("");
+  const author = note.author || { name: "Family" };
+  const mine = state.user && String(note.author?.id) === String(state.user.id);
   return `<article class="post">
     <header>
-      ${face(state.user)}
+      ${face(author)}
       <div>
-        <strong>${esc(state.user?.name || "Lisa")}</strong>
+        <strong>${esc(author.name || "Family")}</strong>
         <time>${esc(when(note.updatedAt))}</time>
       </div>
-      <div class="post-tools">
+      ${mine ? `<div class="post-tools">
         <button class="btn quiet" type="button" data-action="edit-note" data-id="${esc(note.id)}">Edit</button>
         <button class="btn danger" type="button" data-action="delete-note" data-id="${esc(note.id)}">Delete</button>
-      </div>
+      </div>` : ""}
     </header>
     ${note.body ? `<p>${esc(note.body)}</p>` : ""}
     ${media ? `<div class="post-media ${visual.length > 1 ? "many" : "one"}">${media}</div>` : ""}
     ${chips ? `<div class="file-row">${chips}</div>` : ""}
+    ${reactBar("note", note.id, note.social, true)}
+  </article>`;
+}
+
+function reactBar(type, id, social, withComments) {
+  if (!state.user) return "";
+  const box = social || { likes: 0, stars: 0, liked: false, starred: false, comments: [] };
+  const comments = withComments ? `<form class="comment-form" data-type="${esc(type)}" data-id="${esc(id)}">
+      <input name="body" placeholder="Write a comment" required>
+      <button class="btn quiet" type="submit">Comment</button>
+    </form>
+    <div class="comments">${(box.comments || []).map(commentLine).join("")}</div>` : "";
+  return `<div class="react">
+    <button type="button" class="react-btn ${box.liked ? "on" : ""}" data-action="react" data-kind="like" data-type="${esc(type)}" data-id="${esc(id)}">Like${box.likes ? ` ${box.likes}` : ""}</button>
+    <button type="button" class="react-btn ${box.starred ? "on" : ""}" data-action="react" data-kind="star" data-type="${esc(type)}" data-id="${esc(id)}">Star${box.stars ? ` ${box.stars}` : ""}</button>
+    ${comments}
+  </div>`;
+}
+
+function commentLine(comment) {
+  const mine = state.user && String(comment.author?.id) === String(state.user.id);
+  return `<p class="comment">${face(comment.author)}<span><strong>${esc(comment.author?.name || "Family")}</strong> ${esc(comment.body)}</span>${mine ? `<button type="button" class="btn quiet" data-action="delete-comment" data-id="${esc(comment.id)}">Delete</button>` : ""}</p>`;
+}
+
+function familyView() {
+  if (!state.user) return accountGate("Log in to see the family.");
+  return shell(`
+    <h2 class="page-title">Family</h2>
+    <p>Everyone signed in shares the same recipes, notes, and videos. Follow someone to keep them close.</p>
+    <div class="stack">
+      ${(state.people || []).map(personCard).join("") || `<p class="empty">No accounts yet.</p>`}
+    </div>
+  `);
+}
+
+function personCard(person) {
+  const self = String(person.id) === String(state.user?.id);
+  return `<article class="panel person">
+    ${face(person)}
+    <div>
+      <h3>${esc(person.name)}</h3>
+      ${person.bio ? `<p>${esc(person.bio)}</p>` : ""}
+      <p class="empty">${person.followers || 0} follow ${esc(person.name)}</p>
+    </div>
+    ${self ? `<span class="empty">This is you</span>` : `<button class="btn ${person.following ? "quiet" : ""}" type="button" data-action="follow" data-id="${esc(person.id)}">${person.following ? "Following" : "Follow"}</button>`}
   </article>`;
 }
 
@@ -508,11 +561,11 @@ function studio() {
         </div>
       </form>
     </div>
-    <h3>Saved to watch</h3>
+    <h3>Saved videos</h3>
     <div class="stack">
       ${saved.map(libraryCard).join("") || `<p class="empty">Nothing saved yet.</p>`}
     </div>
-    <h3>Your shelf</h3>
+    <h3>Family films</h3>
     <div class="stack">${films.map(libraryCard).join("") || `<p class="empty">Your films will sit here.</p>`}</div>
   `);
 }
@@ -536,11 +589,12 @@ function cameraStage() {
 function libraryCard(item) {
   const id = youtubeId(item.url);
   const editing = String(state.libraryEdit) === String(item.id);
+  const mine = state.user && String(item.author?.id) === String(state.user.id);
   return `<article class="film">
     <div class="card-tools">
-      <p class="kicker">${esc(item.kind)}</p>
-      <button class="btn quiet" type="button" data-action="edit-library" data-id="${esc(item.id)}">Edit</button>
-      <button class="btn danger" type="button" data-action="delete-library" data-id="${esc(item.id)}">Delete</button>
+      <p class="kicker">${esc(item.kind)}${item.author ? ` · ${esc(item.author.name)}` : ""}</p>
+      ${mine ? `<button class="btn quiet" type="button" data-action="edit-library" data-id="${esc(item.id)}">Edit</button>
+      <button class="btn danger" type="button" data-action="delete-library" data-id="${esc(item.id)}">Delete</button>` : ""}
     </div>
     ${editing ? `<form id="library-edit-form" class="stack">
       <input type="hidden" name="id" value="${esc(item.id)}">
@@ -556,6 +610,7 @@ function libraryCard(item) {
     ${!editing && item.notes ? `<p>${esc(item.notes)}</p>` : ""}
     ${!editing && item.description ? `<p>${esc(item.description)}</p>` : ""}
     ${!editing && item.url && !id && !hostedVideo(item.url) ? `<div class="actions"><button class="btn quiet" data-action="open-source" data-url="${esc(item.url)}" data-title="${esc(item.title)}">Open inside the book</button></div>` : ""}
+    ${reactBar("film", item.id, item.social, true)}
   </article>`;
 }
 
@@ -663,6 +718,9 @@ function render() {
   } else if (current.name === "studio") {
     document.title = "Studio · Lisa's Recipe Book";
     html = studio();
+  } else if (current.name === "family") {
+    document.title = "Family · Lisa's Recipe Book";
+    html = familyView();
   } else if (current.name === "profile" || current.name === "account") {
     document.title = current.name === "account" ? "Log in · Lisa's Recipe Book" : "Profile · Lisa's Recipe Book";
     html = current.name === "profile" ? profile() : accountGate("Log in with your email and password. First time here? Create an account in the next box.");
@@ -756,10 +814,17 @@ function keptLink(url) {
 }
 
 async function refreshPrivate() {
-  if (!state.user) { state.notes = []; state.library = []; return; }
-  const [notes, library] = await Promise.all([api("/api/notes"), api("/api/library")]);
+  if (!state.user) { state.notes = []; state.library = []; state.people = []; return; }
+  const [notes, library, people, recipes] = await Promise.all([
+    api("/api/notes"),
+    api("/api/library"),
+    api("/api/people"),
+    api("/api/recipes")
+  ]);
   state.notes = notes.notes;
   state.library = library.items;
+  state.people = people.people;
+  state.recipes = recipes.recipes;
 }
 
 document.addEventListener("click", async (event) => {
@@ -772,6 +837,7 @@ document.addEventListener("click", async (event) => {
   }
   const button = event.target.closest("[data-action], [data-cuisine], [data-shelf]");
   if (!button) return;
+  if (button.closest("a.card")) event.preventDefault();
   if (button.dataset.cuisine) { state.cuisine = button.dataset.cuisine; render(); return; }
   if (button.dataset.shelf) {
     state.shelfCategory = button.dataset.shelf;
@@ -856,6 +922,27 @@ document.addEventListener("click", async (event) => {
     }
     if (action === "edit-library") { rememberFilm(); state.libraryEdit = button.dataset.id; render(); }
     if (action === "cancel-library-edit") { state.libraryEdit = ""; render(); }
+    if (action === "react") {
+      event.preventDefault();
+      await api("/api/reactions", { method: "POST", json: { targetType: button.dataset.type, targetId: button.dataset.id, kind: button.dataset.kind } });
+      await refreshPrivate();
+      render();
+    }
+    if (action === "follow") {
+      const result = await api(`/api/people/${button.dataset.id}/follow`, { method: "POST" });
+      const person = (state.people || []).find((item) => String(item.id) === String(button.dataset.id));
+      if (person) {
+        const was = person.following;
+        person.following = result.following;
+        person.followers = Math.max(0, (person.followers || 0) + (result.following && !was ? 1 : !result.following && was ? -1 : 0));
+      }
+      render();
+    }
+    if (action === "delete-comment" && confirm("Delete this comment?")) {
+      await api(`/api/comments/${button.dataset.id}`, { method: "DELETE" });
+      await refreshPrivate();
+      render();
+    }
     if (action === "delete-library" && confirm("Delete this?")) {
       await api(`/api/library/${button.dataset.id}`, { method: "DELETE" });
       if (String(state.libraryEdit) === String(button.dataset.id)) state.libraryEdit = "";
@@ -929,6 +1016,14 @@ document.addEventListener("submit", async (event) => {
   event.preventDefault();
   const data = Object.fromEntries(new FormData(form).entries());
   try {
+    if (form.classList.contains("comment-form")) {
+      const text = String(data.body || "").trim();
+      if (!text) throw new Error("Write a comment first.");
+      await api("/api/comments", { method: "POST", json: { targetType: form.dataset.type, targetId: form.dataset.id, body: text } });
+      await refreshPrivate();
+      render();
+      return;
+    }
     if (form.id === "register-form" || form.id === "login-form") {
       const result = await api(form.id === "login-form" ? "/api/auth/login" : "/api/auth/register", { method: "POST", json: data });
       localStorage.setItem("lisa-token", result.token);
