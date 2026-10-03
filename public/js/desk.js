@@ -100,6 +100,16 @@ export function messagesView() {
   return threadList();
 }
 
+function crumbs(parts) {
+  const bits = parts.map((part, index) => {
+    const last = index === parts.length - 1;
+    const label = esc(part.label);
+    if (last || !part.href) return `<span aria-current="page">${label}</span>`;
+    return `<a href="${esc(part.href)}">${label}</a>`;
+  }).join(`<span class="crumb-gap" aria-hidden="true">/</span>`);
+  return `<nav class="crumbs" aria-label="Breadcrumb">${bits}</nav>`;
+}
+
 function threadList() {
   const state = deps.state;
   if (!state.threadListReady) {
@@ -122,7 +132,8 @@ function threadList() {
   const ringer = Notification.permission === "granted"
     ? ""
     : `<button class="btn moss" type="button" data-action="enable-ringer">Turn on the ringer</button>`;
-  return `<h2 class="page-title">Messages</h2>
+  return `${crumbs([{ label: "Home", href: "#/" }, { label: "Messages" }])}
+    <h2 class="page-title">Messages</h2>
     <p>Write to someone in the family, or call. While the book is open, the phone rings until they answer or the call passes. Turn on the ringer if you also want an alert.</p>
     <div class="actions">${ringer}</div>
     ${draft}
@@ -164,8 +175,13 @@ function threadView(id) {
   }
   const person = state.threadPerson;
   const draft = state.shareDraft ? `${state.shareDraft.title}\n${state.shareDraft.url}` : "";
-  if (!person) return `<h2 class="page-title">Messages</h2><p class="empty">Opening the conversation…</p>`;
-  return `<p class="kicker"><a href="#/messages">Messages</a></p>
+  const trail = crumbs([
+    { label: "Home", href: "#/" },
+    { label: "Messages", href: "#/messages" },
+    { label: person?.name || "Conversation" }
+  ]);
+  if (!person) return `${trail}<h2 class="page-title">Messages</h2><p class="empty">Opening the conversation…</p>`;
+  return `${trail}
     <div class="thread-head">
       <span class="presence ${person.active ? "on" : ""}">${deps.face(person)}</span>
       <div>

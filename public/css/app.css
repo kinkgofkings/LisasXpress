@@ -674,6 +674,9 @@ body.menu-open { overflow: hidden; }
 .thread-row { display: flex; gap: 12px; align-items: center; text-decoration: none; color: inherit; }
 .thread-row .empty, .search-hit .empty { display: block; }
 .thread-head { display: flex; gap: 12px; align-items: center; }
+.crumbs { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 0 0 12px; font-size: 14px; }
+.crumbs a { color: var(--clay); text-decoration: underline; text-underline-offset: 3px; }
+.crumbs [aria-current="page"], .crumb-gap { color: var(--muted); }
 .presence { position: relative; display: inline-grid; }
 .presence.on::after {
   content: "";

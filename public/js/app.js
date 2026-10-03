@@ -1,4 +1,4 @@
-import { attachCallMedia, bindDesk, callLayer, deskAction, deskNavigated, deskSubmit, deskTick, linkTools, messagesView, pageLink, paintDeskBadge, searchView, warmRinger } from "./desk.js?v=22";
+import { attachCallMedia, bindDesk, callLayer, deskAction, deskNavigated, deskSubmit, deskTick, linkTools, messagesView, pageLink, paintDeskBadge, searchView, warmRinger } from "./desk.js?v=23";
 
 const API = window.APP_CONFIG?.apiBase || "";
 const state = {
