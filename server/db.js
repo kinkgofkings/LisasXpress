@@ -32,6 +32,7 @@ db.exec(`
     image_credit TEXT NOT NULL DEFAULT '',
     source_url TEXT NOT NULL DEFAULT '',
     source_title TEXT NOT NULL DEFAULT '',
+    youtube TEXT NOT NULL DEFAULT '',
     family INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
@@ -68,16 +69,17 @@ db.exec(`
 try {
   db.exec("ALTER TABLE notes ADD COLUMN attachments TEXT NOT NULL DEFAULT '[]'");
 } catch { /* the column is already there */ }
+try {
+  db.exec("ALTER TABLE recipes ADD COLUMN youtube TEXT NOT NULL DEFAULT ''");
+} catch { /* the column is already there */ }
 
 export function seedIfEmpty() {
-  const row = db.prepare("SELECT COUNT(*) AS count FROM recipes").get();
-  if (row.count > 0) return;
   const insert = db.prepare(`
-    INSERT INTO recipes (
+    INSERT OR IGNORE INTO recipes (
       id, title, cuisine, category, summary, yield_text, prep_minutes, cook_minutes,
-      ingredients, steps, notes, image, image_credit, source_url, source_title, family,
+      ingredients, steps, notes, image, image_credit, source_url, source_title, youtube, family,
       created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
   const now = new Date().toISOString();
   for (const recipe of RECIPES) {
@@ -97,6 +99,7 @@ export function seedIfEmpty() {
       recipe.imageCredit || "",
       recipe.sourceUrl || "",
       recipe.sourceTitle || "",
+      recipe.youtube || "",
       recipe.family ? 1 : 0,
       now,
       now
@@ -122,6 +125,7 @@ export function recipeRow(row) {
     imageCredit: row.image_credit,
     sourceUrl: row.source_url,
     sourceTitle: row.source_title,
+    youtube: row.youtube || "",
     family: Boolean(row.family),
     updatedAt: row.updated_at,
     media: db.prepare("SELECT id, kind, path, caption FROM recipe_media WHERE recipe_id = ? ORDER BY id").all(row.id)

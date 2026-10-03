@@ -23,6 +23,7 @@ CREATE TABLE IF NOT EXISTS recipes (
   image_credit TEXT NOT NULL DEFAULT '',
   source_url TEXT NOT NULL DEFAULT '',
   source_title TEXT NOT NULL DEFAULT '',
+  youtube TEXT NOT NULL DEFAULT '',
   family INTEGER NOT NULL DEFAULT 0,
   author_id INTEGER,
   created_at TEXT NOT NULL,

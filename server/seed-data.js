@@ -1,7 +1,10 @@
+import { STAPLES } from "./staples.js";
+import { MORE } from "./more-plates.js";
+
 const commons = "Wikimedia Commons";
 const book = "Photograph for Lisa's Recipe Book";
 
-export const RECIPES = [
+const BOOK = [
   {
     id: "oak-smoked-brisket",
     title: "Oak-Smoked Beef Brisket",
@@ -994,3 +997,5 @@ export const RECIPES = [
     sourceTitle: "Court-bouillon"
   }
 ];
+
+export const RECIPES = [...BOOK, ...STAPLES, ...MORE];

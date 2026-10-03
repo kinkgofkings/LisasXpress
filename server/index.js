@@ -98,7 +98,7 @@ function lines(value) {
 }
 
 function cuisineOf(value) {
-  if (value === "cajun" || value === "library") return value;
+  if (["cajun", "library", "texmex", "garden", "kids", "pets"].includes(value)) return value;
   return "texas";
 }
 

@@ -10,7 +10,7 @@ function lines(value) {
 }
 
 function cuisineOf(value) {
-  if (value === "cajun" || value === "library") return value;
+  if (["cajun", "library", "texmex", "garden", "kids", "pets"].includes(value)) return value;
   return "texas";
 }
 
@@ -124,6 +124,7 @@ async function recipeRow(env, row) {
     imageCredit: row.image_credit,
     sourceUrl: row.source_url,
     sourceTitle: row.source_title,
+    youtube: row.youtube || "",
     family: Boolean(row.family),
     authorId: row.author_id || null,
     updatedAt: row.updated_at,
@@ -293,8 +294,8 @@ async function route(request, env, url, parts) {
   if (first === "library" && second && method === "PATCH") return updateLibrary(request, env, second);
   if (first === "library" && second && method === "DELETE") return deleteLibrary(request, env, second);
 
-  if (first === "world" && !second && method === "GET") return worldList(url);
-  if (first === "world" && second && !third && method === "GET") return worldOne(second);
+  if (first === "world" && !second && method === "GET") return worldList(request, url, env);
+  if (first === "world" && second && !third && method === "GET") return worldOne(request, env, second);
   if (first === "world" && third === "keep" && method === "POST") return worldKeep(request, env, second);
 
   if (first === "browse" && method === "GET") return openBrowse(url);
@@ -533,8 +534,20 @@ async function socialFor(env, user, type, ids) {
   return map;
 }
 
+function reactionTarget(item) {
+  const source = String(item.sourceUrl || item.source_url || "");
+  const fromSource = source.match(/themealdb\.com\/meal\/(\d+)/);
+  const mealId = fromSource?.[1] || (item.world ? String(item.mealId || item.id || "").replace(/^mealdb-/, "") : "");
+  if (mealId && /^\d+$/.test(mealId)) return { type: "world", id: `mealdb-${mealId}` };
+  return { type: "recipe", id: String(item.id) };
+}
+
 async function decorateRecipes(env, user, recipes) {
-  const social = await socialFor(env, user, "recipe", recipes.map((item) => item.id));
+  const keys = recipes.map(reactionTarget);
+  const [recipeSocial, worldSocial] = await Promise.all([
+    socialFor(env, user, "recipe", keys.filter((key) => key.type === "recipe").map((key) => key.id)),
+    socialFor(env, user, "world", keys.filter((key) => key.type === "world").map((key) => key.id))
+  ]);
   const ids = [...new Set(recipes.map((item) => item.authorId).filter(Boolean))];
   const authors = {};
   if (ids.length) {
@@ -542,10 +555,10 @@ async function decorateRecipes(env, user, recipes) {
     const rows = await env.DB.prepare(`SELECT id, name, bio, avatar_path FROM users WHERE id IN (${marks})`).bind(...ids).all();
     for (const row of rows.results || []) authors[row.id] = person(row);
   }
-  return recipes.map((item) => ({
+  return recipes.map((item, index) => ({
     ...item,
     author: authors[item.authorId] || null,
-    social: social[String(item.id)] || emptySocial()
+    social: (keys[index].type === "world" ? worldSocial : recipeSocial)[keys[index].id] || emptySocial()
   }));
 }
 
@@ -553,6 +566,16 @@ async function targetExists(env, type, id) {
   if (type === "recipe") return env.DB.prepare("SELECT id FROM recipes WHERE id = ?").bind(id).first();
   if (type === "note") return env.DB.prepare("SELECT id FROM notes WHERE id = ?").bind(id).first();
   if (type === "film") return env.DB.prepare("SELECT id FROM library_items WHERE id = ? AND kind NOT IN ('tiktok', 'facebook')").bind(id).first();
+  if (type === "world") {
+    const mealId = String(id).replace(/^mealdb-/, "");
+    if (!/^\d+$/.test(mealId)) return null;
+    try {
+      await worldRecipe(mealId);
+      return { id: `mealdb-${mealId}` };
+    } catch {
+      return null;
+    }
+  }
   return null;
 }
 
@@ -593,8 +616,8 @@ async function toggleReaction(request, env) {
   const type = String(body.targetType || "");
   const id = String(body.targetId || "");
   const kind = body.kind === "star" ? "star" : "like";
-  if (!["recipe", "note", "film"].includes(type) || !id) return json({ error: "That could not be saved." }, 400);
-  if (!await targetExists(env, type, id)) return json({ error: "That is not in the book." }, 404);
+  if (!["recipe", "note", "film", "world"].includes(type) || !id) return json({ error: "That could not be saved." }, 400);
+  if (!await targetExists(env, type, id)) return json({ error: "That could not be found." }, 404);
   const existing = await env.DB.prepare(
     "SELECT 1 AS found FROM reactions WHERE user_id = ? AND target_type = ? AND target_id = ? AND kind = ?"
   ).bind(user.id, type, id, kind).first();
@@ -617,9 +640,9 @@ async function addComment(request, env) {
   const type = String(body.targetType || "");
   const id = String(body.targetId || "");
   const text = String(body.body || "").trim().slice(0, 1000);
-  if (!["recipe", "note", "film"].includes(type) || !id) return json({ error: "That comment could not be saved." }, 400);
+  if (!["recipe", "note", "film", "world"].includes(type) || !id) return json({ error: "That comment could not be saved." }, 400);
   if (!text) return json({ error: "Write a comment first." }, 400);
-  if (!await targetExists(env, type, id)) return json({ error: "That is not in the book." }, 404);
+  if (!await targetExists(env, type, id)) return json({ error: "That could not be found." }, 404);
   const now = new Date().toISOString();
   const result = await env.DB.prepare(
     "INSERT INTO comments (user_id, target_type, target_id, body, created_at) VALUES (?, ?, ?, ?, ?)"
@@ -1027,17 +1050,29 @@ async function deleteLibrary(request, env, id) {
   return json({ ok: true });
 }
 
-async function worldList(url) {
+async function withWorldSocial(env, user, meals) {
+  const social = await socialFor(env, user, "world", meals.map((meal) => `mealdb-${meal.id}`));
+  return meals.map((meal) => ({ ...meal, social: social[`mealdb-${meal.id}`] || emptySocial() }));
+}
+
+async function worldList(request, url, env) {
   try {
-    return json(await worldCatalog({ q: url.searchParams.get("q") || "", category: url.searchParams.get("category") || "" }));
+    const user = await userFrom(env, request);
+    const catalog = await worldCatalog({ q: url.searchParams.get("q") || "", category: url.searchParams.get("category") || "" });
+    catalog.meals = await withWorldSocial(env, user, catalog.meals || []);
+    return json(catalog);
   } catch (error) {
     return json({ error: error.message || "The recipe library could not be reached." }, error.status || 502);
   }
 }
 
-async function worldOne(id) {
+async function worldOne(request, env, id) {
   try {
-    return json({ recipe: await worldRecipe(id) });
+    const user = await userFrom(env, request);
+    const recipe = await worldRecipe(id);
+    const social = await socialFor(env, user, "world", [recipe.id]);
+    recipe.social = social[recipe.id] || emptySocial();
+    return json({ recipe });
   } catch (error) {
     return json({ error: error.message || "The recipe library could not be reached." }, error.status || 502);
   }

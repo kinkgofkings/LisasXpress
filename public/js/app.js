@@ -30,7 +30,14 @@ const state = {
   filmDraft: { title: "", description: "" },
   libraryEdit: "",
   people: [],
-  previews: {}
+  previews: {},
+  bookHits: [],
+  bookHitNote: "",
+  bookHitSeq: 0,
+  bookHitLoading: false,
+  qFocus: false,
+  qCaret: 0,
+  shelfNotice: ""
 };
 const timer = { endAt: 0, pausedRemaining: 0, running: false, handle: null, alerted: false };
 let deferredInstall = null;
@@ -124,8 +131,24 @@ function recipeLink(recipe) {
 function cuisineLabel(cuisine) {
   if (cuisine === "cajun") return "Cajun";
   if (cuisine === "texas") return "Texas";
+  if (cuisine === "texmex") return "Tex-Mex";
+  if (cuisine === "garden") return "Garden";
+  if (cuisine === "pets") return "The Pet Connection";
+  if (cuisine === "kids") return "Little ones";
   if (cuisine === "library") return "Library";
   return cuisine || "";
+}
+
+function matchesChip(recipe) {
+  if (state.cuisine === "all") return true;
+  if (state.cuisine === "breakfast") return recipe.category === "Breakfast";
+  if (state.cuisine === "sweets") return recipe.category === "Sweets";
+  if (state.cuisine === "texas") return recipe.cuisine === "texas" || recipe.cuisine === "texmex";
+  if (state.cuisine === "garden") return recipe.cuisine === "garden" || recipe.category === "Garden";
+  if (state.cuisine === "pets") return recipe.cuisine === "pets";
+  if (state.cuisine === "kids") return recipe.cuisine === "kids";
+  if (state.cuisine === "stews") return /stew|pot roast/i.test(`${recipe.title} ${recipe.category}`);
+  return recipe.cuisine === state.cuisine;
 }
 function youtubeId(url) {
   try {
@@ -220,13 +243,27 @@ function paintInstall() {
   document.body.insertAdjacentHTML("beforeend", installCard(state.showInstall));
 }
 
-function home() {
-  const list = state.recipes.filter((recipe) => {
-    const blob = `${recipe.title} ${recipe.summary} ${recipe.category}`.toLowerCase();
-    if (state.cuisine !== "all" && recipe.cuisine !== state.cuisine) return false;
-    if (state.q && !blob.includes(state.q.toLowerCase())) return false;
-    return true;
+function matchingRecipes() {
+  const q = state.q.trim().toLowerCase();
+  return state.recipes.filter((recipe) => {
+    if (!matchesChip(recipe)) return false;
+    if (!q) return true;
+    const blob = [recipe.title, recipe.summary, recipe.category, recipe.notes, ...(recipe.ingredients || []), ...(recipe.steps || [])].join(" ").toLowerCase();
+    return blob.includes(q);
   });
+}
+
+function reactionTarget(item) {
+  const source = String(item.sourceUrl || "");
+  const fromSource = source.match(/themealdb\.com\/meal\/(\d+)/);
+  const mealId = fromSource?.[1] || (item.world ? String(item.mealId || item.id || "").replace(/^mealdb-/, "") : "");
+  if (mealId && /^\d+$/.test(mealId)) return { type: "world", id: `mealdb-${mealId}` };
+  return { type: "recipe", id: String(item.id) };
+}
+
+function home() {
+  const list = matchingRecipes();
+  const outside = Boolean(state.q.trim()) && !list.length;
   const featured = state.recipes.find((recipe) => recipe.id === "oak-smoked-brisket") || state.recipes[0];
   return shell(`
     <section class="hero">
@@ -244,11 +281,15 @@ function home() {
     </section>
     <div class="toolbar">
       <input id="q" placeholder="Search the book" value="${esc(state.q)}">
-      ${[["all", "All"], ["texas", "Texas"], ["cajun", "Cajun"], ["library", "Kept"]].map(([item, label]) => `<button type="button" class="chip ${state.cuisine === item ? "active" : ""}" data-cuisine="${item}">${label}</button>`).join("")}
+      ${[["all", "All"], ["texas", "Texas"], ["texmex", "Tex-Mex"], ["stews", "Stews"], ["breakfast", "Breakfast"], ["sweets", "Sweets"], ["kids", "Little ones"], ["pets", "The Pet Connection"], ["garden", "Garden"], ["cajun", "Cajun"], ["library", "Kept"]].map(([item, label]) => `<button type="button" class="chip ${state.cuisine === item ? "active" : ""}" data-cuisine="${item}">${label}</button>`).join("")}
       <span class="empty">${list.length} recipes</span>
     </div>
+    ${!state.q.trim() && state.cuisine === "all" ? stapleBands() : ""}
+    ${outside && state.bookHitNote ? `<p class="empty">${esc(state.bookHitNote)}</p>` : ""}
     <section class="grid">
-      ${list.map(card).join("") || `<p class="empty">${state.cuisine === "library" ? "Nothing kept from the library yet. Browse below and keep a plate." : "Nothing matches that search."}</p>`}
+      ${outside
+        ? (state.bookHits.length ? state.bookHits.map(worldCard).join("") : (state.bookHitNote && !state.bookHitLoading ? "" : `<p class="empty">Looking through the open library…</p>`))
+        : (list.map(card).join("") || `<p class="empty">${state.cuisine === "library" ? "Nothing kept from the library yet. Browse below and keep a plate." : "Nothing matches that search."}</p>`)}
     </section>
     <section class="library-band">
       <div class="band-head">
@@ -265,18 +306,52 @@ function home() {
   `);
 }
 
+function plateBand(kicker, title, recipes, limit = 4) {
+  const shown = recipes.slice(0, limit);
+  if (!shown.length) return "";
+  return `<section class="library-band">
+    <div class="band-head"><div><p class="kicker">${esc(kicker)}</p><h2>${esc(title)}</h2></div></div>
+    <div class="grid">${shown.map(card).join("")}</div>
+  </section>`;
+}
+
+function stapleBands() {
+  const plates = state.recipes;
+  return [
+    plateBand("Texas", "The Texas table.", plates.filter((recipe) => recipe.cuisine === "texas" && recipe.category === "Mains")),
+    plateBand("Breakfast", "Morning plates.", plates.filter((recipe) => recipe.category === "Breakfast")),
+    plateBand("Tex-Mex", "Tex-Mex, on this table.", plates.filter((recipe) => recipe.cuisine === "texmex" && recipe.category === "Mains")),
+    plateBand("Sweets", "Cobblers, fudge, and fried ice cream.", plates.filter((recipe) => recipe.category === "Sweets")),
+    plateBand("From the garden", "Pulled, washed, pickled, and canned.", plates.filter((recipe) => recipe.cuisine === "garden")),
+    plateBand("The pot", "Pot roasts and homemade stews.", plates.filter((recipe) => /stew|pot roast/i.test(recipe.title)), 6),
+    plateBand("Little ones", "Soft fruit for babies. Fruit, yogurt, and oats for toddlers.", plates.filter((recipe) => recipe.cuisine === "kids"), 6),
+    plateBand("The Pet Connection", "Dog treats. Not the whole supper.", plates.filter((recipe) => recipe.cuisine === "pets"), 8)
+  ].join("");
+}
+
 function worldCard(meal) {
-  return `<a class="card" href="#/world/${esc(meal.id)}">
-    ${meal.image ? `<img src="${esc(meal.image)}" alt="${esc(meal.title)}">` : `<div class="ph"></div>`}
-    <div>
-      <div class="kicker">Library${meal.category ? ` · ${esc(meal.category)}` : ""}${meal.area ? ` · ${esc(meal.area)}` : ""}</div>
-      <h2>${esc(meal.title)}</h2>
-      <p>Open it, then keep it beside your own recipes.</p>
-    </div>
-  </a>`;
+  const mealId = String(meal.id || "").replace(/^mealdb-/, "");
+  const kept = state.recipes.find((item) => String(item.sourceUrl || "").includes(`/meal/${mealId}`));
+  const add = kept
+    ? `<a class="btn quiet" href="#/recipe/${esc(kept.id)}">Open in the book</a>`
+    : (state.user
+      ? `<button class="btn" type="button" data-action="keep-recipe" data-id="${esc(mealId)}">Add to the book</button>`
+      : `<a class="btn" href="#/account">Log in to add</a>`);
+  return `<article class="card">
+    <a class="card-link" href="#/world/${esc(mealId)}">
+      ${meal.image ? `<img src="${esc(meal.image)}" alt="${esc(meal.title)}">` : `<div class="ph"></div>`}
+      <div>
+        <div class="kicker">Library${meal.category ? ` · ${esc(meal.category)}` : ""}${meal.area ? ` · ${esc(meal.area)}` : ""}</div>
+        <h2>${esc(meal.title)}</h2>
+        <p>From the open library.</p>
+      </div>
+    </a>
+    <div class="card-actions">${add}${reactBar("world", `mealdb-${mealId}`, meal.social, false)}</div>
+  </article>`;
 }
 
 function card(recipe) {
+  const target = reactionTarget(recipe);
   return `<a class="card" href="#/recipe/${recipe.id}">
     ${recipe.image ? `<img src="${esc(asset(recipe.image))}" alt="${esc(recipe.title)}">` : `<div class="ph"></div>`}
     <div>
@@ -284,7 +359,7 @@ function card(recipe) {
       <h2>${esc(recipe.title)}</h2>
       <p>${esc(recipe.summary)}</p>
       ${recipe.author ? `<p class="empty">From ${esc(recipe.author.name)}</p>` : ""}
-      ${reactBar("recipe", recipe.id, recipe.social, false)}
+      ${reactBar(target.type, target.id, recipe.social, false)}
     </div>
   </a>`;
 }
@@ -309,6 +384,9 @@ function recipeView(recipe) {
         <p class="kicker">${recipe.world ? "Library" : esc(cuisineLabel(recipe.cuisine))} · ${esc(recipe.category)}${recipe.author ? ` · ${esc(recipe.author.name)}` : ""}${recipe.family ? `<span class="badge">Tex's kitchen</span>` : ""}</p>
         <h2 class="page-title" style="font-size:clamp(36px,5vw,58px)">${esc(recipe.title)}</h2>
         <p>${esc(recipe.summary)}</p>
+        ${recipe.cuisine === "pets" ? `<p class="empty">A treat for the dog, not the whole supper. Ask the vet before a dog's food changes. Never use xylitol, chocolate, grapes, raisins, onion, or garlic.</p>` : ""}
+        ${recipe.category === "Babies" ? `<p class="empty">For a baby who is already eating smooth food. No honey before the first birthday. Ask the baby's doctor before a new food.</p>` : ""}
+        ${recipe.category === "Toddlers" ? `<p class="empty">Soft pieces for a toddler. Cut fruit small. These are snacks of fruit, yogurt, and oats, not a meal plan.</p>` : ""}
         <div class="meta">
           <span>Serves ${esc(recipe.yieldText)}</span>
           ${recipe.prepMinutes ? `<span>Prep ${clock(recipe.prepMinutes)}</span>` : ""}
@@ -340,7 +418,7 @@ function recipeView(recipe) {
           <button class="btn quiet" data-action="timer-reset">Reset</button>
         </div>
         ${youtubeId(recipe.youtube) ? `<div class="watch"><iframe src="https://www.youtube-nocookie.com/embed/${esc(youtubeId(recipe.youtube))}?rel=0&playsinline=1" title="${esc(recipe.title)}" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; fullscreen" allowfullscreen></iframe></div>` : ""}
-        ${reactBar("recipe", recipe.id, recipe.social, true)}
+        ${reactBar(reactionTarget(recipe).type, reactionTarget(recipe).id, recipe.social, true)}
         <h3>Ingredients</h3>
         <ul>${recipe.ingredients.map((item) => `<li>${esc(item)}</li>`).join("")}</ul>
         <h3>Method</h3>
@@ -363,8 +441,8 @@ function editor(recipe) {
     <form id="recipe-form" class="panel">
       <div class="field"><label>Title<input name="title" required value="${esc(value.title)}"></label></div>
       <div class="split">
-        <div class="field"><label>Table<select name="cuisine">${[["texas", "Texas"], ["cajun", "Cajun"], ["library", "Library"]].map(([id, label]) => `<option value="${id}" ${value.cuisine === id ? "selected" : ""}>${label}</option>`).join("")}</select></label></div>
-        <div class="field"><label>Kind<select name="category">${["Mains", "Sides", "Breakfast", "Sweets", "Drinks"].map((item) => `<option ${value.category === item ? "selected" : ""}>${item}</option>`).join("")}</select></label></div>
+        <div class="field"><label>Table<select name="cuisine">${[["texas", "Texas"], ["texmex", "Tex-Mex"], ["garden", "Garden"], ["kids", "Little ones"], ["pets", "The Pet Connection"], ["cajun", "Cajun"], ["library", "Library"]].map(([id, label]) => `<option value="${id}" ${value.cuisine === id ? "selected" : ""}>${label}</option>`).join("")}</select></label></div>
+        <div class="field"><label>Kind<select name="category">${["Mains", "Sides", "Breakfast", "Sweets", "Drinks", "Garden", "Babies", "Toddlers", "Pets"].map((item) => `<option ${value.category === item ? "selected" : ""}>${item}</option>`).join("")}</select></label></div>
       </div>
       <div class="field"><label>A short introduction<textarea name="summary">${esc(value.summary)}</textarea></label></div>
       <div class="split">
@@ -401,9 +479,10 @@ function libraryView() {
     <div class="toolbar">
       ${state.shelfCategories.map((item) => `<button type="button" class="chip ${!state.shelfQ && state.shelfCategory === item ? "active" : ""}" data-shelf="${esc(item)}">${esc(item)}</button>`).join("")}
     </div>
+    ${state.shelfNotice ? `<p class="empty">${esc(state.shelfNotice)}</p>` : ""}
     ${state.shelfError ? `<p class="empty">${esc(state.shelfError)}</p>` : ""}
     <section class="grid">
-      ${state.shelf.map(worldCard).join("") || (state.shelfLoading ? "" : `<p class="empty">Nothing matches that search.</p>`)}
+      ${state.shelf.map(worldCard).join("") || (state.shelfLoading ? "" : `<p class="empty">Looking through the open library…</p>`)}
     </section>
   `);
 }
@@ -924,9 +1003,14 @@ document.addEventListener("click", async (event) => {
     if (action === "cancel-library-edit") { state.libraryEdit = ""; render(); }
     if (action === "react") {
       event.preventDefault();
-      await api("/api/reactions", { method: "POST", json: { targetType: button.dataset.type, targetId: button.dataset.id, kind: button.dataset.kind } });
+      const type = button.dataset.type;
+      const id = button.dataset.id;
+      const kind = button.dataset.kind;
+      await api("/api/reactions", { method: "POST", json: { targetType: type, targetId: id, kind } });
+      flipSocial(type, id, kind);
       await refreshPrivate();
-      render();
+      if (type === "world" && route().name === "world") await ensureWorld(route().id);
+      else render();
     }
     if (action === "follow") {
       const result = await api(`/api/people/${button.dataset.id}/follow`, { method: "POST" });
@@ -941,7 +1025,8 @@ document.addEventListener("click", async (event) => {
     if (action === "delete-comment" && confirm("Delete this comment?")) {
       await api(`/api/comments/${button.dataset.id}`, { method: "DELETE" });
       await refreshPrivate();
-      render();
+      if (route().name === "world") await ensureWorld(route().id);
+      else render();
     }
     if (action === "delete-library" && confirm("Delete this?")) {
       await api(`/api/library/${button.dataset.id}`, { method: "DELETE" });
@@ -960,8 +1045,8 @@ document.addEventListener("click", async (event) => {
     if (action === "keep-recipe") {
       const data = await api(`/api/world/${button.dataset.id}/keep`, { method: "POST" });
       replaceRecipe(data.recipe);
-      say("Kept in the book.");
-      go(`#/recipe/${data.recipe.id}`);
+      say("Added to the book.");
+      render();
     }
     if (action === "retry-world") { state.worldMiss = ""; state.worldError = ""; render(); }
     if (action === "sign-out") { localStorage.removeItem("lisa-token"); state.user = null; go("#/"); }
@@ -973,10 +1058,13 @@ document.addEventListener("click", async (event) => {
 document.addEventListener("input", (event) => {
   if (event.target.id === "q") {
     state.q = event.target.value;
-    const caret = event.target.selectionStart;
+    state.qFocus = true;
+    state.qCaret = event.target.selectionStart;
     render();
     const field = document.getElementById("q");
-    if (field) { field.focus(); field.setSelectionRange(caret, caret); }
+    if (field) { field.focus(); field.setSelectionRange(state.qCaret, state.qCaret); }
+    clearTimeout(state.bookTimer);
+    state.bookTimer = setTimeout(runBookSearch, 350);
   }
   if (event.target.id === "note-body") state.noteDraft = event.target.value;
   if (event.target.closest?.("#film-form")) rememberFilm();
@@ -1021,7 +1109,8 @@ document.addEventListener("submit", async (event) => {
       if (!text) throw new Error("Write a comment first.");
       await api("/api/comments", { method: "POST", json: { targetType: form.dataset.type, targetId: form.dataset.id, body: text } });
       await refreshPrivate();
-      render();
+      if (form.dataset.type === "world" && route().name === "world") await ensureWorld(route().id);
+      else render();
       return;
     }
     if (form.id === "register-form" || form.id === "login-form") {
@@ -1158,6 +1247,72 @@ document.addEventListener("submit", async (event) => {
   }
 });
 
+function flipSocial(type, id, kind) {
+  const apply = (social) => {
+    const box = { likes: 0, stars: 0, liked: false, starred: false, comments: [], ...(social || {}) };
+    if (kind === "star") {
+      box.starred = !box.starred;
+      box.stars = Math.max(0, box.stars + (box.starred ? 1 : -1));
+    } else {
+      box.liked = !box.liked;
+      box.likes = Math.max(0, box.likes + (box.liked ? 1 : -1));
+    }
+    return box;
+  };
+  const mealId = String(id).replace(/^mealdb-/, "");
+  for (const list of [state.shelf, state.featured, state.bookHits]) {
+    for (const meal of list) {
+      if (type === "world" && String(meal.id).replace(/^mealdb-/, "") === mealId) meal.social = apply(meal.social);
+    }
+  }
+  for (const recipe of Object.values(state.worldCache)) {
+    if (recipe && reactionTarget(recipe).type === type && reactionTarget(recipe).id === id) recipe.social = apply(recipe.social);
+  }
+  for (const recipe of state.recipes) {
+    const key = reactionTarget(recipe);
+    if (key.type === type && key.id === id) recipe.social = apply(recipe.social);
+  }
+  for (const note of state.notes) {
+    if (type === "note" && String(note.id) === String(id)) note.social = apply(note.social);
+  }
+  for (const item of state.library) {
+    if (type === "film" && String(item.id) === String(id)) item.social = apply(item.social);
+  }
+}
+
+async function runBookSearch() {
+  const q = state.q.trim();
+  const seq = ++state.bookHitSeq;
+  if (!q || matchingRecipes().length) {
+    state.bookHits = [];
+    state.bookHitNote = "";
+    state.bookHitLoading = false;
+    if (route().name === "home") render();
+    return;
+  }
+  state.bookHitLoading = true;
+  try {
+    const data = await api(`/api/world?q=${encodeURIComponent(q)}`);
+    if (seq !== state.bookHitSeq) return;
+    state.bookHits = data.meals || [];
+    state.bookHitNote = data.notice || "";
+  } catch (error) {
+    if (seq !== state.bookHitSeq) return;
+    state.bookHits = [];
+    state.bookHitNote = error.message || "The open library could not be reached.";
+  }
+  state.bookHitLoading = false;
+  if (route().name === "home") {
+    render();
+    const field = document.getElementById("q");
+    if (field && state.qFocus) {
+      field.focus();
+      const pos = state.qCaret ?? field.value.length;
+      field.setSelectionRange(pos, pos);
+    }
+  }
+}
+
 async function loadShelf() {
   const seq = ++state.shelfSeq;
   state.shelfLoading = true;
@@ -1168,6 +1323,7 @@ async function loadShelf() {
     const data = await api(`/api/world?${params}`);
     if (seq !== state.shelfSeq) return;
     state.shelf = data.meals;
+    state.shelfNotice = data.notice || "";
     state.shelfCategories = data.categories;
     if (!state.shelfQ) state.shelfCategory = data.category || state.shelfCategory;
     if (!state.featured.length && !state.shelfQ) state.featured = data.meals.slice(0, 6);

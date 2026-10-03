@@ -85,24 +85,91 @@ export async function listCategories() {
   return (data.categories || []).map((item) => item.strCategory).filter(Boolean);
 }
 
+const NEARBY = [
+  [/cobbler|crumble|crisp|buckle|slump|grunt/i, ["crumble", "pie", "peach", "apple"]],
+  [/pie|tart/i, ["pie", "tart"]],
+  [/cake|brownie/i, ["cake"]],
+  [/cookie|biscuit/i, ["cookie", "biscuit"]],
+  [/bread|roll/i, ["bread"]],
+  [/soup|gumbo|stew|chili/i, ["soup", "stew"]],
+  [/pancake|waffle/i, ["pancake"]]
+];
+
+function addMeals(found, rows) {
+  for (const meal of rows || []) {
+    const item = meal.strMeal ? brief(meal, meal.strCategory || "") : meal;
+    if (!item.id || found.some((saved) => saved.id === item.id)) continue;
+    found.push(item);
+  }
+}
+
+async function mealsNamed(query) {
+  const data = await cached(`${BASE}/search.php?s=${encodeURIComponent(query)}`);
+  return data.meals || [];
+}
+
+async function mealsWithIngredient(query) {
+  const data = await cached(`${BASE}/filter.php?i=${encodeURIComponent(query)}`);
+  return data.meals || [];
+}
+
+async function searchMeals(query) {
+  const found = [];
+  addMeals(found, await mealsNamed(query));
+  if (!found.length) addMeals(found, await mealsWithIngredient(query));
+  if (!found.length) {
+    for (const word of query.toLowerCase().split(/[^a-z0-9]+/).filter((word) => word.length > 2)) {
+      addMeals(found, await mealsNamed(word));
+      if (!found.length) addMeals(found, await mealsWithIngredient(word));
+      if (found.length) break;
+    }
+  }
+  if (found.length) return { meals: found.slice(0, 24), notice: "" };
+  const hints = NEARBY.find(([pattern]) => pattern.test(query));
+  for (const term of hints?.[1] || []) {
+    addMeals(found, await mealsNamed(term));
+    if (found.length >= 12) break;
+  }
+  if (found.length) {
+    return {
+      meals: found.slice(0, 24),
+      notice: `No ${query} in the book yet. These close plates are from the open library.`
+    };
+  }
+  const letter = query.match(/[a-z]/i)?.[0]?.toLowerCase();
+  if (letter) {
+    const data = await cached(`${BASE}/search.php?f=${letter}`);
+    addMeals(found, data.meals || []);
+  }
+  if (found.length) {
+    return {
+      meals: found.slice(0, 24),
+      notice: `No ${query} in the book yet. These plates from the open library start with ${letter.toUpperCase()}.`
+    };
+  }
+  const data = await cached(`${BASE}/filter.php?c=Dessert`);
+  addMeals(found, (data.meals || []).slice(0, 24));
+  return {
+    meals: found.slice(0, 24),
+    notice: `No ${query} in the book yet. Here are desserts from the open library.`
+  };
+}
+
 export async function worldCatalog({ q = "", category = "" } = {}) {
   const categories = await listCategories();
   const query = String(q || "").trim();
   const chosen = String(category || "").trim();
   if (query) {
-    const data = await cached(`${BASE}/search.php?s=${encodeURIComponent(query)}`);
-    return {
-      categories,
-      category: "",
-      meals: (data.meals || []).map((meal) => brief(meal))
-    };
+    const result = await searchMeals(query);
+    return { categories, category: "", meals: result.meals, notice: result.notice };
   }
   const name = categories.includes(chosen) ? chosen : "Chicken";
   const data = await cached(`${BASE}/filter.php?c=${encodeURIComponent(name)}`);
   return {
     categories,
     category: name,
-    meals: (data.meals || []).map((meal) => brief(meal, name))
+    meals: (data.meals || []).map((meal) => brief(meal, name)),
+    notice: ""
   };
 }
 
