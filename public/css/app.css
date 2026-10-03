@@ -120,18 +120,38 @@ img { display: block; }
   position: relative;
   overflow: hidden;
 }
+.hero-copy::before {
+  content: "";
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  width: 76px;
+  height: 76px;
+  border-radius: 50%;
+  background: rgba(255, 250, 251, 0.28);
+  box-shadow: inset 0 0 0 1.5px rgba(255, 255, 255, 0.85);
+}
 .hero-copy::after {
   content: "";
   position: absolute;
-  top: 18px;
-  right: 18px;
+  top: 22px;
+  right: 27px;
   width: 54px;
-  height: 82px;
+  height: 78px;
   background: url("/ribbon.svg") center / contain no-repeat;
-  opacity: 0.95;
+  filter:
+    drop-shadow(1.25px 0 0 #fffafb)
+    drop-shadow(-1.25px 0 0 #fffafb)
+    drop-shadow(0 1.25px 0 #fffafb)
+    drop-shadow(0 -1.25px 0 #fffafb)
+    drop-shadow(0 3px 5px rgba(74, 10, 40, 0.35));
 }
 .hero-copy p { color: rgba(255, 247, 250, 0.88); max-width: 42ch; }
-.hero-copy .eyebrow { color: #ffd6e8; }
+.hero-copy .eyebrow {
+  color: #ffd6e8;
+  margin-right: 96px;
+  line-height: 1.55;
+}
 .hero-copy .page-title { color: #fffafb; }
 .hero-copy .btn.quiet { color: #fff; border-color: rgba(255, 255, 255, 0.45); background: transparent; }
 .hero-photo {
@@ -229,15 +249,17 @@ img { display: block; }
 .gallery figure { margin: 0; }
 .gallery img, .gallery video { width: 100%; height: 120px; object-fit: cover; border-radius: 12px; }
 .layout { display: grid; grid-template-columns: 280px 1fr; gap: 18px; }
-.feed { width: min(680px, 100%); margin: 8px auto 0; display: grid; gap: 14px; }
+.feed { width: min(680px, 100%); margin: 8px auto 0; display: grid; gap: 22px; }
 .feed > .kicker { margin: 2px 4px 0; }
 .composer, .post {
   background: #fff;
   border: 1px solid rgba(201, 150, 44, 0.38);
   border-radius: 22px;
   box-shadow: var(--shadow);
-  padding: 14px;
+  padding: 18px 18px 22px;
 }
+.home-notes { display: grid; gap: 22px; }
+.library-band > .btn { margin-top: 8px; }
 .composer-row, .post header { display: flex; gap: 12px; align-items: flex-start; }
 .post header { align-items: center; flex-wrap: wrap; }
 .post-tools, .card-tools { display: flex; align-items: center; gap: 8px; margin-left: auto; }
@@ -301,10 +323,25 @@ img { display: block; }
   box-shadow: 0 0 0 4px rgba(255, 255, 255, 0.28);
 }
 .shutter.on span { width: 34px; height: 34px; border-radius: 10px; }
-.face, .face-ph {
-  width: 42px; height: 42px; border-radius: 50%; object-fit: cover; flex: none;
+.face-link { display: inline-flex; flex: 0 0 auto; line-height: 0; }
+img.face, img.avatar {
+  display: block;
+  width: 42px;
+  height: 42px;
+  min-width: 42px;
+  max-width: 42px;
+  min-height: 42px;
+  max-height: 42px;
+  object-fit: cover;
+  border-radius: 50%;
+}
+.face-ph {
+  width: 42px; height: 42px; min-width: 42px; border-radius: 50%; flex: none;
   background: var(--clay); color: #fff7fa;
   display: grid; place-items: center; font-family: var(--serif); font-size: 20px;
+}
+img.avatar {
+  width: 96px; height: 96px; min-width: 96px; max-width: 96px; min-height: 96px; max-height: 96px;
 }
 .composer textarea {
   flex: 1;
@@ -355,6 +392,41 @@ img { display: block; }
 .post-media.one img, .post-media.one video { aspect-ratio: 4 / 3; max-height: 70vh; }
 .post-media.many img, .post-media.many video { aspect-ratio: 1; height: 180px; }
 .post-media video { object-fit: contain; }
+.film-card { position: relative; }
+.film-open {
+  position: relative;
+  display: block;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: #3a2030;
+  aspect-ratio: 4 / 3;
+  cursor: pointer;
+  overflow: hidden;
+}
+.film-poster { width: 100%; height: 100%; object-fit: cover; display: block; }
+.film-play {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 68px;
+  height: 68px;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  background: rgba(255, 250, 251, 0.94);
+  box-shadow: 0 8px 22px rgba(74, 10, 40, 0.28);
+}
+.film-play::before {
+  content: "";
+  position: absolute;
+  left: 27px;
+  top: 22px;
+  border-style: solid;
+  border-width: 12px 0 12px 20px;
+  border-color: transparent transparent transparent #ad1457;
+}
+.film-card video { width: 100%; display: block; aspect-ratio: 4 / 3; background: #14080e; object-fit: contain; }
 .file-chip {
   display: inline-flex; align-items: center; gap: 8px;
   padding: 8px 12px; border-radius: 14px;
@@ -462,14 +534,28 @@ img { display: block; }
 .react { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 12px; }
 .react-btn { border-radius: 999px; border: 1px solid var(--line); background: white; color: var(--ink); padding: 6px 12px; }
 .react-btn.on { background: var(--blush); color: var(--clay); border-color: var(--clay); }
-.comment-form { display: flex; gap: 8px; width: 100%; min-width: 0; }
-.comment-form input { flex: 1; min-width: 0; }
+.comment-form { display: grid; gap: 8px; width: 100%; min-width: 0; }
+.comment-form input { width: 100%; min-width: 0; }
+.comment-tools { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.comment-picked { color: var(--muted); font-size: 14px; }
+.comment-media { display: grid; gap: 8px; margin-top: 6px; }
+.comment-media img, .comment-media video {
+  width: min(100%, 280px);
+  height: auto;
+  max-height: 360px;
+  object-fit: contain;
+  border-radius: 12px;
+  background: #2a1520;
+}
 .comments-block { margin-top: 14px; display: grid; gap: 8px; }
 .comments-block h3 { margin: 0; font-family: var(--sans); font-size: 15px; font-weight: 650; letter-spacing: 0; }
 .see-comments { font-size: 14px; color: var(--clay); text-decoration: underline; text-underline-offset: 3px; justify-self: start; }
 .comments-page { display: grid; gap: 14px; margin-top: 8px; }
 .comments { width: 100%; display: grid; gap: 8px; }
-.comment { display: flex; gap: 8px; align-items: flex-start; margin: 0; }
+.comment { display: flex; gap: 10px; align-items: flex-start; margin: 0; }
+.comment > div { min-width: 0; flex: 1; }
+.session img.face { width: 52px; height: 52px; min-width: 52px; max-width: 52px; min-height: 52px; max-height: 52px; }
+.call-face img.face { width: 96px; height: 96px; min-width: 96px; max-width: 96px; min-height: 96px; max-height: 96px; }
 .person { display: flex; gap: 14px; align-items: center; }
 .person h3 { margin: 0; }
 
