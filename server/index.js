@@ -13,9 +13,33 @@ import {
   addSignal, askHost, deskSnapshot, ensureDesk, getCall, listSignals, listThreads,
   placeCall, readThread, searchBook, sendMessage, setCall, sqliteDesk
 } from "./desk.js";
+import { listProducts, placeOrder, quoteShipping, removeProduct, saveProduct, sqliteShop } from "./shop.js";
 
 const deskDb = sqliteDesk(db);
 await ensureDesk(deskDb);
+const shopDb = sqliteShop(db);
+
+function loadDotEnv() {
+  try {
+    const text = fs.readFileSync(path.resolve(".env"), "utf8");
+    for (const line of text.split(/\n/)) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith("#")) continue;
+      const eq = trimmed.indexOf("=");
+      if (eq < 1) continue;
+      const key = trimmed.slice(0, eq).trim();
+      let value = trimmed.slice(eq + 1).trim();
+      if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) value = value.slice(1, -1);
+      if (!process.env[key]) process.env[key] = value;
+    }
+  } catch { /* the live book uses its own secrets */ }
+}
+loadDotEnv();
+
+function shopReply(res, result) {
+  if (result?.error) return res.status(result.status || 400).json({ error: result.error });
+  return res.json(result);
+}
 
 const app = express();
 const root = path.resolve("public");
@@ -24,11 +48,7 @@ fs.mkdirSync(uploadDir, { recursive: true });
 seedIfEmpty();
 
 function allowOrigin(origin) {
-  if (!origin) return true;
-  if (/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) return true;
-  if (/^https:\/\/[a-z0-9-]+(\.[a-z0-9-]+)*\.pages\.dev$/.test(origin)) return true;
-  if (/^https:\/\/[a-z0-9-]+\.trycloudflare\.com$/.test(origin)) return true;
-  return false;
+  return true;
 }
 
 app.use(cors({
@@ -369,47 +389,83 @@ app.delete("/api/recipes/:id/media/:mediaId", (req, res) => {
 });
 
 app.get("/api/notes", (req, res) => {
-  const user = requireUser(req, res);
-  if (!user) return;
-  const notes = db.prepare("SELECT id, title, body, attachments, updated_at AS updatedAt FROM notes WHERE user_id = ? ORDER BY updated_at DESC").all(user.id);
+  const user = userFrom(req);
+  const notes = db.prepare(`
+    SELECT n.id, n.title, n.body, n.attachments, n.updated_at AS updatedAt,
+           u.id AS author_id, u.name AS author_name, u.avatar_path AS author_avatar
+    FROM notes n
+    LEFT JOIN users u ON u.id = n.user_id
+    ORDER BY n.updated_at DESC
+  `).all();
   const rows = notes.map((row) => ({
     ...publicNote(row),
-    author: { id: user.id, name: user.name, avatar: user.avatar_path || "" }
+    author: {
+      id: row.author_id || 1,
+      name: row.author_name || "Family",
+      avatar: row.author_avatar || ""
+    }
   }));
   res.json({ notes: attachSocial(user, "note", rows, (item) => item.id) });
 });
 
+app.get("/api/notes/:id", (req, res) => {
+  const user = userFrom(req);
+  const row = db.prepare(`
+    SELECT n.id, n.title, n.body, n.attachments, n.updated_at AS updatedAt,
+           u.id AS author_id, u.name AS author_name, u.avatar_path AS author_avatar
+    FROM notes n
+    LEFT JOIN users u ON u.id = n.user_id
+    WHERE n.id = ?
+  `).get(req.params.id);
+  if (!row) return res.status(404).json({ error: "That note is not in the book." });
+  const note = {
+    ...publicNote(row),
+    author: {
+      id: row.author_id || 1,
+      name: row.author_name || "Family",
+      avatar: row.author_avatar || ""
+    }
+  };
+  const [enriched] = attachSocial(user, "note", [note], (item) => item.id);
+  res.json({ note: enriched });
+});
+
 app.post("/api/notes", (req, res) => {
+  const user = requireUser(req, res);
+  if (!user) return;
   if ((req.get("content-type") || "").includes("application/json")) {
-    const user = requireUser(req, res);
-    if (!user) return;
     const text = String(req.body.body || "").slice(0, 20000);
     const listed = Array.isArray(req.body.attachments) ? req.body.attachments : [];
     const attachments = listed.flatMap((item) => {
       const filePath = String(item?.path || "");
-      if (!/^\/uploads\/[\w.-]+$/.test(filePath)) return [];
-      const full = path.join(uploadDir, path.basename(filePath));
-      if (!fs.existsSync(full)) return [];
+      if (!/^\/(uploads|images)\/[\w.\-]+$/.test(filePath)) return [];
       const mime = String(item.mime || "");
-      const kind = mime.startsWith("video/") || item.kind === "video" ? "video" : mime.startsWith("image/") || item.kind === "image" ? "image" : "file";
+      const kind = mime.startsWith("video/") || item.kind === "video" || /\.(mp4|webm|mov)$/i.test(filePath) ? "video" : mime.startsWith("image/") || item.kind === "image" || /\.(jpe?g|png|webp|gif)$/i.test(filePath) ? "image" : "file";
       return [{
         path: filePath,
-        mime,
+        mime: mime || (kind === "video" ? "video/mp4" : "image/jpeg"),
         name: String(item.name || "File").replace(/[^\w.\- ]+/g, "").slice(0, 80) || "File",
         kind
       }];
     });
     if (!text.trim() && !attachments.length) return res.status(400).json({ error: "Write a note, or add a picture." });
     const line = text.trim().split(/\n/)[0].slice(0, 80);
-    const title = line || (attachments[0]?.kind === "video" ? "Video" : attachments[0]?.kind === "file" ? "File" : "Photo");
+    const title = String(req.body.title || line || (attachments[0]?.kind === "video" ? "Video" : attachments[0]?.kind === "file" ? "File" : "Photo")).slice(0, 120);
     const now = new Date().toISOString();
     const result = db.prepare("INSERT INTO notes (user_id, title, body, attachments, updated_at) VALUES (?, ?, ?, ?, ?)").run(user.id, title, text, JSON.stringify(attachments), now);
-    return res.status(201).json({ note: { id: Number(result.lastInsertRowid), title, body: text, attachments, updatedAt: now } });
+    const createdNote = {
+      id: Number(result.lastInsertRowid),
+      title,
+      body: text,
+      attachments,
+      updatedAt: now,
+      author: { id: user.id, name: user.name, avatar: user.avatar_path || "" },
+      social: emptySocial()
+    };
+    return res.status(201).json({ note: createdNote });
   }
   noteUpload.any()(req, res, (error) => {
     if (error) return res.status(400).json({ error: error.message || "That file could not be saved." });
-    const user = requireUser(req, res);
-    if (!user) return;
     const text = String(req.body.body || "").slice(0, 20000);
     const attachments = (req.files || []).map((file) => ({
       path: `/uploads/${file.filename}`,
@@ -419,10 +475,20 @@ app.post("/api/notes", (req, res) => {
     }));
     if (!text.trim() && !attachments.length) return res.status(400).json({ error: "Write a note, or add a picture." });
     const line = text.trim().split(/\n/)[0].slice(0, 80);
-    const title = line || (attachments[0]?.kind === "video" ? "Video" : attachments[0]?.kind === "file" ? "File" : "Photo");
+    const title = String(req.body.title || line || (attachments[0]?.kind === "video" ? "Video" : attachments[0]?.kind === "file" ? "File" : "Photo")).slice(0, 120);
     const now = new Date().toISOString();
     const result = db.prepare("INSERT INTO notes (user_id, title, body, attachments, updated_at) VALUES (?, ?, ?, ?, ?)").run(user.id, title, text, JSON.stringify(attachments), now);
-    res.status(201).json({ note: { id: result.lastInsertRowid, title, body: text, attachments, updatedAt: now } });
+    res.status(201).json({
+      note: {
+        id: Number(result.lastInsertRowid),
+        title,
+        body: text,
+        attachments,
+        updatedAt: now,
+        author: { id: user.id, name: user.name, avatar: user.avatar_path || "" },
+        social: emptySocial()
+      }
+    });
   });
 });
 
@@ -469,6 +535,19 @@ app.post("/api/library", (req, res) => {
 });
 
 const FILM_PART = 800_000;
+
+app.post("/api/upload", noteUpload.single("file"), (req, res) => {
+  if (!req.file) return res.status(400).json({ error: "Choose a file to upload." });
+  const mime = req.file.mimetype || "";
+  const kind = mime.startsWith("video/") ? "video" : mime.startsWith("image/") ? "image" : "file";
+  const filePath = `/uploads/${req.file.filename}`;
+  res.status(201).json({
+    path: filePath,
+    name: String(req.file.originalname || "File").replace(/[^\w.\- ]+/g, "").slice(0, 80) || "File",
+    kind,
+    mime
+  });
+});
 
 app.post("/api/media", (req, res) => {
   const user = requireUser(req, res);
@@ -635,6 +714,57 @@ app.delete("/api/library/:id", (req, res) => {
   if (item) removeUpload(item.file_path);
   db.prepare("DELETE FROM library_items WHERE id = ? AND user_id = ?").run(req.params.id, user.id);
   res.json({ ok: true });
+});
+
+app.get("/api/shop/products", async (req, res) => {
+  try {
+    res.json(await listProducts(shopDb, req.query.category || "all"));
+  } catch (error) {
+    res.status(500).json({ error: "The shop hit a snag. Please try again." });
+  }
+});
+
+app.post("/api/shop/products", async (req, res) => {
+  if (!requireUser(req, res)) return;
+  try {
+    shopReply(res, await saveProduct(shopDb, req.body || {}));
+  } catch {
+    res.status(500).json({ error: "The shop hit a snag. Please try again." });
+  }
+});
+
+app.patch("/api/shop/products/:id", async (req, res) => {
+  if (!requireUser(req, res)) return;
+  try {
+    shopReply(res, await saveProduct(shopDb, req.body || {}, req.params.id));
+  } catch {
+    res.status(500).json({ error: "The shop hit a snag. Please try again." });
+  }
+});
+
+app.delete("/api/shop/products/:id", async (req, res) => {
+  if (!requireUser(req, res)) return;
+  try {
+    res.json(await removeProduct(shopDb, req.params.id));
+  } catch {
+    res.status(500).json({ error: "The shop hit a snag. Please try again." });
+  }
+});
+
+app.post("/api/shop/shipping-estimate", async (req, res) => {
+  try {
+    shopReply(res, await quoteShipping(shopDb, req.body || {}));
+  } catch {
+    res.status(500).json({ error: "The shop hit a snag. Please try again." });
+  }
+});
+
+app.post("/api/shop/checkout", async (req, res) => {
+  try {
+    shopReply(res, await placeOrder(shopDb, req.body || {}, process.env));
+  } catch {
+    res.status(500).json({ error: "The shop hit a snag. Please try again." });
+  }
 });
 
 app.get("/api/world", async (req, res) => {
@@ -892,16 +1022,15 @@ app.post("/api/comments", (req, res) => {
   }
   const attachments = [];
   for (const item of Array.isArray(req.body.attachments) ? req.body.attachments : []) {
-    const path = String(item?.path || "");
-    if (!/^\/uploads\/[\w.-]+$/.test(path)) continue;
-    const row = db.prepare("SELECT mime FROM files WHERE path = ?").get(path);
-    if (!row) continue;
-    const mime = String(row.mime || "");
+    const filePath = String(item?.path || "");
+    if (!/^\/(uploads|images)\/[\w.\-]+$/.test(filePath)) continue;
+    const kind = item?.kind === "video" || /\.(mp4|webm|mov)$/i.test(filePath) ? "video" : "image";
+    const mime = item?.mime || (kind === "video" ? "video/mp4" : "image/jpeg");
     attachments.push({
-      path,
+      path: filePath,
       mime,
       name: String(item.name || "File").replace(/[^\w.\- ]+/g, "").slice(0, 80) || "File",
-      kind: mime.startsWith("video/") ? "video" : "image"
+      kind
     });
   }
   if (!text && !attachments.length) return res.status(400).json({ error: "Write a comment, or add a picture or video." });
@@ -945,7 +1074,7 @@ app.use((err, _req, res, _next) => {
   res.status(500).json({ error: "The book hit a snag. Please try again." });
 });
 
-const port = Number(process.env.PORT) || 4173;
+const port = 3000;
 app.listen(port, "0.0.0.0", () => {
   console.log(`Lisa's Recipe Book is listening on ${port}`);
 });

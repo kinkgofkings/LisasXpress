@@ -387,6 +387,7 @@ function liveCall(call) {
 }
 
 export function attachCallMedia() {
+  if (!deps.state) return;
   const call = deps.state.call;
   if (!call) return;
   const remote = document.getElementById("call-remote");

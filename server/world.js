@@ -6,7 +6,7 @@ async function cached(url) {
   if (hit && Date.now() - hit.at < 10 * 60 * 1000) return hit.data;
   let response;
   try {
-    response = await fetch(url);
+    response = await fetch(url, { signal: AbortSignal.timeout(8000) });
   } catch {
     throw Object.assign(new Error("The recipe library could not be reached."), { status: 502 });
   }

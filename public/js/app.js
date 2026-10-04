@@ -1,4 +1,5 @@
 import { attachCallMedia, bindDesk, callLayer, clearCallSound, deskAction, deskNavigated, deskSubmit, deskTick, linkTools, messagesView, pageLink, paintDeskBadge, previewCallSound, ringerLabel, saveCallSound, searchView, warmRinger } from "./desk.js?v=26";
+import { loadCart, shopClick, shopSubmit, shopView } from "./shop.js?v=5";
 
 const API = window.APP_CONFIG?.apiBase || "";
 const state = {
@@ -28,6 +29,7 @@ const state = {
   showInstall: "",
   noteDraft: "",
   homeNotes: 3,
+  homePlates: 6,
   noteFiles: [],
   commentPicks: {},
   editingNote: "",
@@ -48,6 +50,10 @@ const state = {
   incoming: null,
   activeUsers: [],
   shareDraft: null,
+  activeModalPost: null,
+  lightboxMediaIndex: 0,
+  feedFilter: "all",
+  noteTitleDraft: "",
   call: null,
   threads: [],
   threadListReady: "",
@@ -62,8 +68,23 @@ const state = {
   ringerName: "",
   ringingFor: "",
   notePosting: false,
-  reacting: ""
+  reacting: "",
+  shopProducts: [],
+  shopLoaded: false,
+  shopLoading: false,
+  shopError: "",
+  shopCategory: "all",
+  cart: [],
+  cartOpen: false,
+  shopMode: "local",
+  shopDraft: {},
+  shopEstimate: null,
+  shopOrder: null,
+  shopEditing: null,
+  shopSaving: false,
+  shopSending: false
 };
+state.cart = loadCart();
 const timer = { endAt: 0, pausedRemaining: 0, running: false, handle: null, alerted: false };
 let deferredInstall = null;
 let wakeLock = null;
@@ -79,6 +100,21 @@ function asset(src) {
   if (src.startsWith("/uploads/")) return `${API}${src}${src.includes("?") ? "&" : "?"}v=4`;
   return src;
 }
+
+function face(person, options = {}) {
+  const p = person || { name: "Family" };
+  const name = p.name || "Family";
+  const initial = name.trim().charAt(0).toUpperCase() || "F";
+  const src = p.avatar || p.avatarUrl;
+  const img = src
+    ? `<img class="face" src="${esc(asset(src))}" alt="${esc(name)}" loading="lazy" decoding="async">`
+    : `<span class="face-ph" aria-label="${esc(name)}">${esc(initial)}</span>`;
+  if (options.link === false || !p.id) return img;
+  return `<a class="face-link" href="#/people/${esc(p.id)}" title="${esc(name)}">${img}</a>`;
+}
+window.face = face;
+window.esc = esc;
+window.asset = asset;
 
 async function shrinkImage(file) {
   if (!file || typeof file === "string" || !file.type?.startsWith("image/") || file.type === "image/gif") return file;
@@ -167,6 +203,27 @@ async function uploadPieces(file, name) {
   return started;
 }
 
+async function uploadFileFast(file, name) {
+  try {
+    const form = new FormData();
+    form.append("file", file, name || file.name || "file");
+    const headers = {};
+    const token = localStorage.getItem("lisa-token");
+    if (token) headers.Authorization = `Bearer ${token}`;
+    const res = await fetch(`${API}/api/upload`, {
+      method: "POST",
+      headers,
+      body: form
+    });
+    if (res.ok) {
+      return await res.json();
+    }
+  } catch {
+    /* fallback to chunked upload */
+  }
+  return uploadPieces(file, name);
+}
+
 async function api(path, options = {}) {
   const headers = { ...(options.headers || {}) };
   const token = localStorage.getItem("lisa-token");
@@ -175,14 +232,28 @@ async function api(path, options = {}) {
     headers["Content-Type"] = "application/json";
     options.body = JSON.stringify(options.json);
   }
-  const response = await fetch(`${API}${path}`, { ...options, headers });
+  const response = await fetch(`${API}${path}`, {
+    ...options,
+    headers,
+    cache: "no-store",
+    signal: options.signal || AbortSignal.timeout(20000)
+  });
   const data = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(data.error || "Something went wrong.");
   return data;
 }
 
 function route() {
-  const parts = (location.hash.replace(/^#/, "") || "/").split("/").filter(Boolean);
+  const hash = (location.hash.replace(/^#/, "") || "/").trim();
+  if (hash.startsWith("/post/") || hash.startsWith("post/")) {
+    const id = hash.replace(/^(\/)?post\//, "").split("/")[0].split("?")[0];
+    return { name: "post", id, more: "" };
+  }
+  if (hash.startsWith("post-") || hash.startsWith("/post-")) {
+    const id = hash.replace(/^(\/)?post-/, "").split("/")[0].split("?")[0];
+    return { name: "post", id, more: "" };
+  }
+  const parts = hash.split("/").filter(Boolean);
   return {
     name: parts[0] || "home",
     id: decodeURIComponent(parts[1] || ""),
@@ -255,7 +326,19 @@ function timerText() {
   return `${pad(Math.floor(seconds / 60))}:${pad(seconds % 60)}`;
 }
 function installedAlready() {
-  return window.matchMedia("(display-mode: standalone)").matches || window.navigator.standalone === true;
+  try {
+    return Boolean(
+      window.matchMedia?.("(display-mode: standalone)")?.matches ||
+      navigator?.standalone === true ||
+      window.navigator?.standalone === true
+    );
+  } catch {
+    return false;
+  }
+}
+
+function shopCtx() {
+  return { state, esc, api, say, render, route, asset, uploadFile: uploadFileFast };
 }
 
 function shell(main) {
@@ -264,14 +347,26 @@ function shell(main) {
       <a class="brand" href="#/">
         <img class="ribbon-mark" src="/ribbon.svg" alt="">
         <span>
-          <p class="eyebrow">For Lisa Miller</p>
+          <p class="eyebrow">Cajun, Texas, and the open library</p>
           <h1>Lisa's Recipe Book</h1>
         </span>
       </a>
+      <nav class="nav" aria-label="Desktop navigation">
+        <a class="${route().name === 'home' ? 'active' : ''}" href="#/"><i class="bi bi-collection-play"></i> Feed</a>
+        <a class="${route().name === 'shop' && route().id !== 'cart' ? 'active' : ''}" href="#/shop"><i class="bi bi-bag"></i> Shop</a>
+        <a class="basket-link ${route().name === 'shop' && route().id === 'cart' ? 'active' : ''}" href="#/shop/cart"><i class="bi bi-cart"></i> Cart${state.cart?.length ? ` (${state.cart.reduce((sum, line) => sum + Number(line.qty || 0), 0)})` : ""}</a>
+        <a class="${route().name === 'notes' ? 'active' : ''}" href="#/notes"><i class="bi bi-journal-text"></i> Notepad</a>
+        <a class="${route().name === 'library' ? 'active' : ''}" href="#/library"><i class="bi bi-book"></i> Library</a>
+        <a class="${route().name === 'messages' ? 'active' : ''}" href="#/messages"><i class="bi bi-chat-dots"></i> Messages</a>
+        <a class="btn" href="#/notes"><i class="bi bi-pencil-square"></i> New Post</a>
+      </nav>
     </header>
     <main class="wrap">${main}</main>
     ${appBar()}
     ${callLayer()}
+    ${state.activeModalPost ? lightboxModal() : ""}
+    ${state.shareDialogPost ? shareDialog() : ""}
+    ${state.zoomedImage ? imageZoomModal() : ""}
     ${state.menu ? superMenu() : ""}
     ${state.reader ? reader() : ""}
     ${state.toast ? `<div class="toast">${esc(state.toast)}</div>` : ""}
@@ -285,6 +380,8 @@ function sectionOn(id) {
   if (id === "library") return here === "library" || here === "world" || fromComments === "library";
   if (id === "notes") return here === "notes" || fromComments === "notes";
   if (id === "studio") return here === "studio" || fromComments === "studio";
+  if (id === "shop") return here === "shop" && route().id !== "cart";
+  if (id === "cart") return here === "shop" && route().id === "cart";
   if (id === "write") return here === "new" || here === "edit";
   return here === id;
 }
@@ -305,6 +402,8 @@ function appBar() {
     <a class="appbar-item ${sectionOn("messages") ? "active" : ""}" href="#/messages" ${sectionOn("messages") ? 'aria-current="page"' : ""}><i class="bi bi-chat-dots" aria-hidden="true"></i><span>Messages</span><span class="ping" data-badge="messages" ${(state.unread || state.incoming) ? "" : "hidden"}></span></a>
     ${item("#/notes", "bi-journal-text", "Notepad", sectionOn("notes"))}
     ${item("#/studio", "bi-camera-reels", "Studio", sectionOn("studio"))}
+    <a class="appbar-item ${sectionOn("shop") ? "active" : ""}" href="#/shop" ${sectionOn("shop") ? 'aria-current="page"' : ""}><i class="bi bi-bag" aria-hidden="true"></i><span>Shop</span></a>
+    <a class="appbar-item ${sectionOn("cart") ? "active" : ""}" href="#/shop/cart" ${sectionOn("cart") ? 'aria-current="page"' : ""}><i class="bi bi-cart" aria-hidden="true"></i><span>Cart</span>${state.cart?.length ? `<b class="shop-badge">${state.cart.reduce((sum, line) => sum + Number(line.qty || 0), 0)}</b>` : ""}</a>
     <button class="appbar-item ${menuOn ? "active" : ""}" type="button" data-action="toggle-menu" aria-expanded="${state.menu ? "true" : "false"}" aria-controls="super-menu">
       <i class="bi bi-grid" aria-hidden="true"></i><span>Menu</span>
     </button>
@@ -350,6 +449,8 @@ function superMenu() {
         ${menuLink("#/library", "bi-collection", "Library", sectionOn("library"))}
         ${menuLink("#/notes", "bi-journal-text", "Notepad", sectionOn("notes"))}
         ${menuLink("#/studio", "bi-camera-reels", "Studio", sectionOn("studio"))}
+        ${menuLink("#/shop", "bi-bag", "Shop", sectionOn("shop"))}
+        ${menuLink("#/shop/cart", "bi-cart", state.cart?.length ? `Cart (${state.cart.reduce((sum, line) => sum + Number(line.qty || 0), 0)})` : "Cart", sectionOn("cart"))}
         ${menuLink("#/family", "bi-people", "Family", sectionOn("family"))}
         ${menuLink("#/new", "bi-plus-circle", "Write a recipe", sectionOn("write"))}
       </div>
@@ -393,19 +494,28 @@ function soundView() {
 function privacyView() {
   return shell(`
     <h2 class="page-title">Privacy</h2>
-    <p>This is a family book for Lisa Miller and the people she invites. It is not a public social network.</p>
+    <p>Lisa's Recipe Book is a kitchen, a family board, and a small shop. Anyone can open it, and anyone can make a profile.</p>
     <section class="panel legal">
-      <h3>What the book keeps</h3>
-      <p>An account holds a name, an email, and a password. The password is stored as a code, not as the words you type. You can also add a short line about yourself and a portrait.</p>
-      <p>The book also keeps recipes, notes, pictures, films, comments, likes, stars, and who follows whom.</p>
+      <h3>How the book works</h3>
+      <p>The Book is the home page. It shows recipes, and notes from people who have a profile. The Library holds more plates. The Shop is for meals, desserts, dog treats, spices, and a Lubbock or Wolfforth errand. Messages, the Notepad, and the Studio open after you log in.</p>
+      <h3>Create a profile</h3>
+      <p>Open Menu, then Log in. In the box marked First time here, type your name, your email, and a password of at least 8 characters. Tap Create account. That profile is yours.</p>
+      <p>You do not need an invitation. If that email already has a profile, log in with it. From Profile you can add a short line about yourself and a portrait.</p>
+      <p>With a profile you can write a recipe, leave a note, comment, like, star, follow someone, send a message, and place a call.</p>
+      <h3>Without a profile</h3>
+      <p>A guest can read the recipes and use the shop. Sending an order does not require an account. Notes, comments, messages, calls, and the family list ask you to log in.</p>
+      <h3>What a profile keeps</h3>
+      <p>A profile holds a name, an email, and a password. The password is stored as a code, not as the words you type. A portrait and a short line about you are optional.</p>
+      <p>The book also keeps the recipes, notes, pictures, films, comments, likes, and stars you add, and who follows whom. Your login stays on this phone until you log out or clear the site data.</p>
+      <h3>The shop</h3>
+      <p>An order keeps the name, phone, street, city, and ZIP you type, plus the items and any special note. A copy of that order is sent through Telegram so the kitchen can fill it. The cart stays on this phone until you send the order or clear the site data.</p>
+      <p>Pay with Cash App. The book does not keep a card number. Cash App handles that payment under its own rules. The price on a custom errand is the runner's trip. The store price is separate.</p>
       <h3>Who can see it</h3>
-      <p>Anyone with an account sees the same recipes, notes, and films. A guest can read the recipes without logging in. Notes, the studio, and the family list stay behind the login.</p>
+      <p>People with a profile see the same recipes, notes, and films. A message is only for the two people in that conversation. A call rings the other phone until they answer, decline, or the ring ends. The book does not record the call. Active means that person has the book open.</p>
       <h3>What we do not do</h3>
       <p>We do not sell this information, and the book does not show ads. A portrait you paste from a link is loaded from that address. A YouTube film plays from YouTube, under YouTube's own rules.</p>
       <h3>Where it lives</h3>
-      <p>The book is hosted on Cloudflare. Open Profile to change your name, your line about yourself, or your portrait. Log out when you are done on a shared phone. If you want an account taken off the book, ask the person who set it up.</p>
-      <h3>Messages and calls</h3>
-      <p>A message is seen by the two people in that conversation. A call rings the other phone until they answer, decline, or the ring ends. The book does not record the call. Active means that person has the book open.</p>
+      <p>The book is hosted on Cloudflare. Open Profile to change your name, your line about yourself, or your portrait. Log out on a shared phone. If you want a profile taken off the book, ask the person who set it up.</p>
     </section>
   `);
 }
@@ -482,38 +592,147 @@ function reactionTarget(item) {
   return { type: "recipe", id: String(item.id) };
 }
 
+function recipeCardResponsive(recipe) {
+  const target = reactionTarget(recipe);
+  const social = recipe.social || { likes: 0, stars: 0, liked: false, starred: false, comments: [] };
+  const totalMins = (Number(recipe.prepMinutes) || 0) + (Number(recipe.cookMinutes) || 0);
+  const timeText = totalMins > 0 ? clock(totalMins) : "Family Classic";
+  const ingCount = Array.isArray(recipe.ingredients) ? recipe.ingredients.length : 0;
+
+  return `
+    <article class="card responsive-plate-card">
+      <a class="card-link" href="#/recipe/${recipe.id}">
+        ${recipe.image ? `<img src="${esc(asset(recipe.image))}" alt="${esc(recipe.title)}" loading="lazy" decoding="async">` : `<div class="ph"></div>`}
+        <div class="card-content-block">
+          <div class="kicker">
+            <span>${esc(cuisineLabel(recipe.cuisine))}</span> · <span>${esc(recipe.category)}</span>
+            ${recipe.family ? `<span class="badge">Tex's kitchen</span>` : ""}
+          </div>
+          <h2>${esc(recipe.title)}</h2>
+          <p>${esc(recipe.summary)}</p>
+          <div class="meta" style="margin-top:10px">
+            <span><i class="bi bi-clock"></i> ${timeText}</span>
+            <span><i class="bi bi-basket"></i> ${ingCount} items</span>
+            ${social.likes ? `<span><i class="bi bi-heart-fill heart-glow"></i> ${social.likes}</span>` : ""}
+          </div>
+        </div>
+      </a>
+      <div class="card-actions" style="padding:0 16px 14px">
+        ${linkTools(recipeLink(recipe), recipe.title)}
+        ${reactBar(target.type, target.id, recipe.social, ["like"])}
+      </div>
+    </article>
+  `;
+}
+
+function feedStream(notes, recipes) {
+  const noteLimit = state.homeNotes || 3;
+  const plateLimit = state.homePlates || 6;
+  const shownNotes = notes.slice(0, noteLimit);
+  const shownPlates = recipes.slice(0, plateLimit);
+  const parts = [];
+  const lead = shownPlates.slice(0, Math.min(4, shownPlates.length));
+  let plateIndex = lead.length;
+  if (lead.length) {
+    parts.push(`<div class="feed-plate-rail" aria-label="Recipes">${lead.map(recipeCardResponsive).join("")}</div>`);
+  }
+  let noteIndex = 0;
+  while (noteIndex < shownNotes.length || plateIndex < shownPlates.length) {
+    const noteChunk = shownNotes.slice(noteIndex, noteIndex + 3);
+    noteIndex += noteChunk.length;
+    if (noteChunk.length) parts.push(noteChunk.map(socialPostCard).join(""));
+    const plateChunk = shownPlates.slice(plateIndex, plateIndex + 2);
+    plateIndex += plateChunk.length;
+    if (plateChunk.length) parts.push(`<div class="feed-plate-stack">${plateChunk.map(recipeCardResponsive).join("")}</div>`);
+    if (!noteChunk.length && !plateChunk.length) break;
+  }
+  if (!parts.length) return `<p class="empty">No family posts yet. Share a note when you are ready.</p>`;
+  const more = notes.length > shownNotes.length || recipes.length > shownPlates.length;
+  if (more) parts.push(`<button class="btn quiet feed-more" type="button" data-action="more-feed">Load more</button>`);
+  return parts.join("");
+}
+
 function home() {
   const list = matchingRecipes();
+  const notes = state.notes || [];
   const outside = Boolean(state.q.trim()) && !list.length;
-  const featured = state.recipes.find((recipe) => recipe.id === "oak-smoked-brisket") || state.recipes[0];
+  const isAllOrPosts = state.feedFilter !== "recipes-only";
+  const showGallery = !isAllOrPosts || Boolean(state.q.trim()) || state.cuisine !== "all";
+
   return shell(`
-    ${familyFeed()}
-    ${!state.q.trim() && state.cuisine === "all" ? stapleBands() : ""}
-    <section class="hero">
-      <div class="hero-copy">
-        <p class="eyebrow">Cajun, Texas, and the open library</p>
-        <h2 class="page-title" style="font-size:clamp(42px,6vw,72px)">A table with your name on it.</h2>
-        <p>Your plates from the bayou and the Hill Country, dressed in survivor pink, with a whole library when you want something new.</p>
-        <div class="actions">
-          <a class="btn" href="#/library">Browse the library</a>
-          <a class="btn quiet" href="#/new">Add a recipe</a>
-          ${state.user ? `<a class="btn quiet" href="#/studio">Open the studio</a>` : `<a class="btn quiet" href="#/account">Log in</a>`}
+    <section class="birthday-hero-banner">
+      <div class="birthday-hero-content">
+        <div class="birthday-sparkle">Cajun & Texas</div>
+        <h1 class="birthday-title">A table with your name on it</h1>
+        <p class="birthday-desc">
+          Your plates from the bayou and the Hill Country, with the family's notes and pictures in the same book.
+        </p>
+        <div class="birthday-quick-actions">
+          <a class="birthday-cta-btn" href="#/notes"><i class="bi bi-pencil-square"></i> Share a note</a>
+          <a class="birthday-cta-btn quiet" href="#/new"><i class="bi bi-plus-circle"></i> Add a recipe</a>
+          <a class="birthday-cta-btn quiet" href="#/library"><i class="bi bi-collection"></i> Open the library</a>
         </div>
       </div>
-      ${featured ? `<a class="hero-photo" href="#/recipe/${featured.id}" style="background-image:url('${esc(asset(featured.image))}')"><span>${esc(featured.title)}</span></a>` : ""}
     </section>
-    <div class="toolbar">
-      <input id="q" placeholder="Search the book" value="${esc(state.q)}">
-      ${[["all", "All"], ["gym", "The Gym"], ["texas", "Texas"], ["texmex", "Tex-Mex"], ["stews", "Stews"], ["breakfast", "Breakfast"], ["sweets", "Sweets"], ["kids", "Little ones"], ["pets", "The Pet Connection"], ["garden", "Garden"], ["cajun", "Cajun"], ["library", "Kept"]].map(([item, label]) => `<button type="button" class="chip ${state.cuisine === item ? "active" : ""}" data-cuisine="${item}">${label}</button>`).join("")}
-      <span class="empty">${list.length} recipes</span>
+
+    <!-- Social Feed Section -->
+    <div class="social-feed-container">
+      <!-- Facebook-Style Post Creator -->
+      ${facebookComposer()}
+
+      <!-- Feed Filter Tabs -->
+      <div class="feed-filter-bar">
+        <div class="feed-tabs-group">
+          <button type="button" class="feed-tab-btn ${isAllOrPosts ? 'active' : ''}" data-action="filter-feed" data-filter="all">
+            <i class="bi bi-collection-play"></i> Family Posts (${notes.length})
+          </button>
+          <button type="button" class="feed-tab-btn ${state.feedFilter === 'recipes-only' ? 'active' : ''}" data-action="filter-feed" data-filter="recipes-only">
+            <i class="bi bi-book"></i> Recipe Collection (${list.length})
+          </button>
+        </div>
+      </div>
+
+      <!-- Feed Posts Stream -->
+      ${isAllOrPosts ? `
+        <div class="social-stream-wrap">
+          ${feedStream(notes, list)}
+        </div>
+      ` : ""}
     </div>
-    ${outside && state.bookHitNote ? `<p class="empty">${esc(state.bookHitNote)}</p>` : ""}
-    <section class="grid">
-      ${outside
-        ? (state.bookHits.length ? state.bookHits.map(worldCard).join("") : (state.bookHitNote && !state.bookHitLoading ? "" : `<p class="empty">Looking through the open library…</p>`))
-        : (list.map(card).join("") || `<p class="empty">${state.cuisine === "library" ? "Nothing kept from the library yet. Browse below and keep a plate." : "Nothing matches that search."}</p>`)}
+
+    <!-- Recipe Gallery Section (generous, responsive cards) -->
+    <section class="recipes-main-section">
+      <div class="section-heading-bar">
+        <div>
+          <span class="eyebrow">Hand-Crafted Collection</span>
+          <h2 class="section-title">Cajun & Texas Kitchen Favorites</h2>
+        </div>
+        <div class="recipe-count-badge">${list.length} family plates</div>
+      </div>
+
+      <div class="toolbar-search-row">
+        <div class="search-input-wrap">
+          <i class="bi bi-search"></i>
+          <input id="q" placeholder="Search recipes (e.g. Gumbo, Ribeye, Cobbler)…" value="${esc(state.q)}">
+        </div>
+        <div class="cuisine-chips-scroll">
+          ${[["all", "All"], ["cajun", "Cajun"], ["texas", "Texas"], ["texmex", "Tex-Mex"], ["stews", "Stews"], ["breakfast", "Breakfast"], ["sweets", "Sweets"], ["gym", "Gym Plates"], ["kids", "Kids"], ["pets", "Pet Connection"]].map(([item, label]) => `
+            <button type="button" class="chip ${state.cuisine === item ? "active" : ""}" data-cuisine="${item}">${label}</button>
+          `).join("")}
+        </div>
+      </div>
+
+      ${outside && state.bookHitNote ? `<p class="empty">${esc(state.bookHitNote)}</p>` : ""}
+
+      ${showGallery ? `<div class="responsive-recipe-grid">
+        ${outside
+          ? (state.bookHits.length ? state.bookHits.map(worldCard).join("") : (state.bookHitNote && !state.bookHitLoading ? "" : `<p class="empty">Looking through the open library…</p>`))
+          : (list.map(recipeCardResponsive).join("") || `<p class="empty">${state.cuisine === "library" ? "Nothing kept from the library yet. Browse below and keep a plate." : "Nothing matches that search."}</p>`)}
+      </div>` : `<p class="empty">The plates are in the feed above. Search here, or open Recipe Collection, to see every one.</p>`}
     </section>
-    <section class="library-band">
+
+    <!-- Open Library Showcase -->
+    <section class="library-band" style="margin-top:40px">
       <div class="band-head">
         <div>
           <p class="kicker">Open library</p>
@@ -521,8 +740,8 @@ function home() {
         </div>
         <a class="btn" href="#/library">See the whole library</a>
       </div>
-      <div class="grid">
-        ${state.featured.map(worldCard).join("") || `<p class="empty">${esc(state.shelfError || "The library is on its way.")}</p>`}
+      <div class="responsive-recipe-grid">
+        ${state.featured.slice(0, 4).map(worldCard).join("") || `<p class="empty">${esc(state.shelfError || "The library is on its way.")}</p>`}
       </div>
     </section>
   `);
@@ -717,11 +936,29 @@ function recipeView(recipe) {
   const shareText = `${recipe.title} from Lisa's Recipe Book`;
   const link = recipeLink(recipe);
   const kept = recipe.world ? state.recipes.find((item) => item.sourceUrl === recipe.sourceUrl) : null;
+  const credit = recipe.imageCredit || "Photograph for Lisa's Recipe Book";
   return shell(`
+    <div class="recipe-view-header-bar">
+      <a class="recipe-back-btn" href="#/">
+        <i class="bi bi-arrow-left"></i>
+        <span>Back to Recipes & Feed</span>
+      </a>
+      <div class="recipe-badges-row">
+        <span class="recipe-badge-cuisine">${esc(cuisineLabel(recipe.cuisine))}</span>
+        <span class="recipe-badge-cat">${esc(recipe.category)}</span>
+        ${recipe.family ? `<span class="badge">Tex's kitchen</span>` : ""}
+      </div>
+    </div>
+
     <article class="recipe">
       <div>
-        <div class="plate">${recipe.image ? `<img src="${esc(asset(recipe.image))}" alt="${esc(recipe.title)}">` : ""}</div>
-        <p class="credit">${esc(recipe.imageCredit || "")}</p>
+        <div class="plate recipe-plate-zoomable" data-action="zoom-recipe-image" data-src="${esc(asset(recipe.image))}" data-title="${esc(recipe.title)}" data-credit="${esc(credit)}" title="Click to view full photo">
+          ${recipe.image ? `<img src="${esc(asset(recipe.image))}" alt="${esc(recipe.title)}">` : ""}
+          <div class="plate-zoom-hint"><i class="bi bi-arrows-fullscreen"></i> Tap photo to zoom</div>
+        </div>
+        <p class="credit clickable-credit" data-action="zoom-recipe-image" data-src="${esc(asset(recipe.image))}" data-title="${esc(recipe.title)}" data-credit="${esc(credit)}" title="Click to view full photo">
+          <i class="bi bi-camera-fill"></i> ${esc(credit)}
+        </p>
         <div class="gallery">
           ${(recipe.media || []).map((item) => `<figure>
             ${item.kind === "video" ? `<video src="${esc(asset(item.path))}" controls></video>` : `<img src="${esc(asset(item.path))}" alt="${esc(item.caption || recipe.title)}">`}
@@ -773,9 +1010,9 @@ function recipeView(recipe) {
         ${reactBar(reactionTarget(recipe).type, reactionTarget(recipe).id, recipe.social)}
         ${commentsBlock(reactionTarget(recipe).type, reactionTarget(recipe).id, recipe.social)}
         <h3>Ingredients</h3>
-        <ul>${recipe.ingredients.map((item) => `<li>${esc(item)}</li>`).join("")}</ul>
+        <ul>${(recipe.ingredients || []).map((item) => `<li>${esc(item)}</li>`).join("")}</ul>
         <h3>Method</h3>
-        <ol>${recipe.steps.map((item) => `<li>${esc(item)}</li>`).join("")}</ol>
+        <ol>${(recipe.steps || []).map((item) => `<li>${esc(item)}</li>`).join("")}</ol>
         ${recipe.notes ? `<h3>Notes</h3><p>${esc(recipe.notes)}</p>` : ""}
         ${recipe.sourceUrl && !mealDbPage(recipe.sourceUrl) ? `<p class="no-print"><button class="btn-line" data-action="open-source" data-url="${esc(recipe.sourceUrl)}" data-title="${esc(recipe.sourceTitle || "Source")}">Open “${esc(recipe.sourceTitle || "source")}” in the book</button></p>` : ""}
         ${state.user && !recipe.world ? `<form class="no-print" id="media-form">
@@ -840,88 +1077,564 @@ function libraryView() {
   `);
 }
 
-function notesView() {
-  if (!state.user) return accountGate("Log in to see the family's notes.");
-  const picks = state.noteFiles.map((item) => `<div class="pick">
-    ${item.kind === "image" ? `<img src="${esc(item.url)}" alt="">` : item.kind === "video" ? `<video src="${esc(item.url)}" muted></video>` : `<span class="file-chip">${esc(item.name)}</span>`}
-    <button type="button" class="pick-x" data-action="drop-file" data-id="${esc(item.id)}" aria-label="Remove ${esc(item.name)}">×</button>
-  </div>`).join("");
-  return shell(`
-    <div class="feed">
-      <p class="kicker">Notepad</p>
-      <form id="note-form" class="composer">
-        <div class="composer-row">
-          ${face(state.user)}
-          <textarea id="note-body" name="body" rows="3" placeholder="Share a note with the family…">${esc(state.noteDraft)}</textarea>
+function facebookComposer() {
+  const user = state.user;
+  const picks = state.noteFiles.map((item) => `
+    <div class="composer-pick-item">
+      ${item.kind === "image" ? `<img src="${esc(item.url)}" alt="">` : item.kind === "video" ? `<video src="${esc(item.url)}" muted></video>` : `<span class="file-icon"><i class="bi bi-file-earmark-text"></i></span>`}
+      <span class="pick-filename">${esc(item.name)}</span>
+      <button type="button" class="pick-remove-btn" data-action="drop-file" data-id="${esc(item.id)}" aria-label="Remove ${esc(item.name)}">×</button>
+    </div>
+  `).join("");
+
+  return `
+    <div class="facebook-composer-card">
+      <div class="composer-card-header">
+        <span class="composer-pill-label">Family notes</span>
+        <span class="composer-sub-label">Share a recipe, a photo, or a picture from the kitchen</span>
+      </div>
+
+      <form id="note-form" class="facebook-composer-form">
+        <div class="composer-input-row">
+          ${user ? face(user) : `<span class="face-ph" aria-hidden="true">F</span>`}
+          <div class="composer-fields">
+            <input type="text" name="title" id="note-title" placeholder="Title (e.g. Grandma's Secret Peach Cobbler)…" class="composer-title-input" value="${esc(state.noteTitleDraft || '')}">
+            <textarea id="note-body" name="body" rows="3" placeholder="Share a note with the family…" class="composer-textarea">${esc(state.noteDraft)}</textarea>
+          </div>
         </div>
-        ${picks ? `<div class="picks">${picks}</div>` : ""}
-        <div class="composer-tools">
-          ${state.editingNote ? "" : `<label class="tool">${iconPhoto()}<span>Photo</span><input data-note-pick="image" type="file" accept="image/*" multiple></label>
-          <label class="tool">${iconVideo()}<span>Video</span><input data-note-pick="video" type="file" accept="video/*,.mov,.mp4,.m4v,.webm"></label>
-          <label class="tool">${iconFile()}<span>File</span><input data-note-pick="file" type="file" accept="application/pdf,text/plain,.pdf,.txt" multiple></label>`}
-          ${state.editingNote ? `<button class="btn quiet" type="button" data-action="cancel-note">Cancel</button>` : ""}
-          <button class="btn" type="submit" data-action="post-note">${state.notePosting ? "Posting…" : (state.editingNote ? "Save" : "Post")}</button>
+
+        ${picks ? `<div class="composer-picks-tray">${picks}</div>` : ""}
+
+        <div class="composer-action-bar">
+          <div class="composer-tools-list">
+            <label class="fb-tool-btn photo" title="Add photos">
+              <i class="bi bi-images"></i>
+              <span>Photo</span>
+              <input data-note-pick="image" type="file" accept="image/*" multiple hidden>
+            </label>
+            <label class="fb-tool-btn video" title="Add video">
+              <i class="bi bi-camera-reels"></i>
+              <span>Video</span>
+              <input data-note-pick="video" type="file" accept="video/*,.mov,.mp4,.m4v,.webm" hidden>
+            </label>
+            <label class="fb-tool-btn doc" title="Add document or recipe PDF">
+              <i class="bi bi-file-earmark-pdf"></i>
+              <span>Recipe Doc</span>
+              <input data-note-pick="file" type="file" accept="application/pdf,text/plain,.pdf,.txt" multiple hidden>
+            </label>
+          </div>
+
+          <div class="composer-submit-wrap">
+            ${state.editingNote ? `<button class="btn quiet" type="button" data-action="cancel-note">Cancel</button>` : ""}
+            <button class="composer-post-btn" type="submit" data-action="post-note" ${state.notePosting ? "disabled" : ""}>
+              ${state.notePosting ? `<i class="bi bi-hourglass-split"></i> Posting…` : (state.editingNote ? "Save Changes" : `<i class="bi bi-send-fill"></i> Post`)}
+            </button>
+          </div>
         </div>
       </form>
-      ${state.notesError ? `<p class="empty">${esc(state.notesError)}</p>` : ""}
-      ${state.notes.map(notePost).join("") || (state.notesError ? "" : `<p class="empty composer-empty">Family notes will show up here.</p>`)}
+    </div>
+  `;
+}
+
+function socialPostCard(note) {
+  const files = Array.isArray(note.attachments) ? note.attachments : [];
+  const visual = files.filter((item) => item.kind === "image" || item.kind === "video");
+  const docs = files.filter((item) => item.kind === "file");
+  const author = note.author || { name: "Family" };
+  const mine = state.user && String(note.author?.id) === String(state.user.id);
+  
+  // Excerpt calculation
+  const fullText = String(note.body || "").trim();
+  const isLong = fullText.length > 210;
+  const excerpt = isLong ? fullText.slice(0, 195).trim() + "…" : fullText;
+  
+  // Cover Media Layout
+  let mediaHtml = "";
+  if (visual.length === 1) {
+    const item = visual[0];
+    mediaHtml = `
+      <div class="social-card-media single" data-action="open-post-modal" data-id="${esc(note.id)}" data-media-index="0">
+        ${item.kind === "video" 
+          ? `<div class="video-preview-wrap"><video src="${esc(asset(item.path))}" preload="metadata" muted playsinline></video><div class="play-overlay"><i class="bi bi-play-circle-fill"></i></div></div>`
+          : `<img src="${esc(asset(item.path))}" alt="${esc(note.title || "Post photo")}" loading="lazy" decoding="async">`}
+      </div>
+    `;
+  } else if (visual.length === 2) {
+    mediaHtml = `
+      <div class="social-card-media duo">
+        ${visual.map((item, idx) => `
+          <div class="media-thumb" data-action="open-post-modal" data-id="${esc(note.id)}" data-media-index="${idx}">
+            ${item.kind === "video"
+              ? `<video src="${esc(asset(item.path))}" preload="metadata" muted playsinline></video><div class="play-overlay mini"><i class="bi bi-play-circle-fill"></i></div>`
+              : `<img src="${esc(asset(item.path))}" alt="" loading="lazy">`}
+          </div>
+        `).join("")}
+      </div>
+    `;
+  } else if (visual.length >= 3) {
+    const firstTwo = visual.slice(0, 2);
+    const third = visual[2];
+    const moreCount = visual.length - 3;
+    mediaHtml = `
+      <div class="social-card-media trio">
+        <div class="media-hero" data-action="open-post-modal" data-id="${esc(note.id)}" data-media-index="0">
+          <img src="${esc(asset(firstTwo[0].path))}" alt="" loading="lazy">
+        </div>
+        <div class="media-side">
+          <div class="media-thumb" data-action="open-post-modal" data-id="${esc(note.id)}" data-media-index="1">
+            <img src="${esc(asset(firstTwo[1].path))}" alt="" loading="lazy">
+          </div>
+          <div class="media-thumb ${moreCount > 0 ? "has-more" : ""}" data-action="open-post-modal" data-id="${esc(note.id)}" data-media-index="2">
+            <img src="${esc(asset(third.path))}" alt="" loading="lazy">
+            ${moreCount > 0 ? `<div class="more-overlay">+${moreCount}</div>` : ""}
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  const social = note.social || { likes: 0, stars: 0, liked: false, starred: false, comments: [] };
+  const comments = Array.isArray(social.comments) ? social.comments : [];
+  const latestComment = comments[comments.length - 1];
+
+  const chips = docs.map((item) => `
+    <a class="file-chip" href="${esc(asset(item.path))}" download="${esc(item.name || "file")}">
+      <i class="bi bi-file-earmark-text"></i><span>${esc(item.name || "Attached recipe")}</span>
+    </a>
+  `).join("");
+
+  return `
+    <article class="social-post-card" data-note="${esc(note.id)}">
+      <header class="social-card-header">
+        <div class="author-lockup">
+          <div class="author-avatar-wrap">
+            ${face(author)}
+          </div>
+          <div class="author-meta">
+            <div class="author-name-row">
+              <strong class="author-name">${esc(author.name || "Family")}</strong>
+            </div>
+            <time class="post-time" datetime="${esc(note.updatedAt)}">${esc(when(note.updatedAt))}</time>
+          </div>
+        </div>
+        <div class="card-options-wrap">
+          <button type="button" class="icon-btn-round" data-action="copy-post-link" data-id="${esc(note.id)}" title="Copy link to post" aria-label="Copy link">
+            <i class="bi bi-link-45deg"></i>
+          </button>
+          <button type="button" class="icon-btn-round" data-action="send-post-message" data-id="${esc(note.id)}" data-title="${esc(note.title || 'Family post')}" title="Send in family message" aria-label="Send in message">
+            <i class="bi bi-send"></i>
+          </button>
+          ${mine ? `
+            <button type="button" class="icon-btn-round danger" data-action="delete-note" data-id="${esc(note.id)}" title="Delete post">
+              <i class="bi bi-trash3"></i>
+            </button>
+          ` : ""}
+        </div>
+      </header>
+
+      ${note.title ? `<h3 class="social-card-title" data-action="open-post-modal" data-id="${esc(note.id)}">${esc(note.title)}</h3>` : ""}
+
+      ${excerpt ? `
+        <div class="social-card-body" data-action="open-post-modal" data-id="${esc(note.id)}">
+          <p>${esc(excerpt)}</p>
+          ${isLong ? `<button type="button" class="see-more-link" data-action="open-post-modal" data-id="${esc(note.id)}">See full post →</button>` : ""}
+        </div>
+      ` : ""}
+
+      ${mediaHtml}
+      ${chips ? `<div class="file-row">${chips}</div>` : ""}
+
+      <!-- Social Metrics Bar -->
+      <div class="social-card-metrics">
+        <span class="metric-item"><i class="bi bi-heart-fill heart-glow"></i> <strong>${social.likes || 0}</strong> ${social.likes === 1 ? 'like' : 'likes'}</span>
+        <button type="button" class="metric-item link-metric" data-action="open-post-modal" data-id="${esc(note.id)}">
+          <strong>${comments.length}</strong> ${comments.length === 1 ? 'comment' : 'comments'}
+        </button>
+      </div>
+
+      <!-- Facebook Action Bar -->
+      <div class="social-card-actions">
+        <button type="button" class="social-action-btn ${social.liked ? 'is-liked' : ''}" data-action="react" data-kind="like" data-type="note" data-id="${esc(note.id)}">
+          <i class="bi ${social.liked ? 'bi-heart-fill' : 'bi-heart'}"></i>
+          <span>${social.liked ? 'Liked' : 'Like'}</span>
+        </button>
+        <button type="button" class="social-action-btn" data-action="focus-comment" data-id="${esc(note.id)}">
+          <i class="bi bi-chat-left-text"></i>
+          <span>Comment</span>
+        </button>
+        <button type="button" class="social-action-btn" data-action="share-post" data-id="${esc(note.id)}" data-title="${esc(note.title || 'A note')}">
+          <i class="bi bi-share"></i>
+          <span>Share</span>
+        </button>
+      </div>
+
+      <!-- Quick Comment Preview & Input -->
+      <div class="social-card-comment-section">
+        ${comments.length > 1 ? `
+          <button type="button" class="view-all-comments-btn" data-action="open-post-modal" data-id="${esc(note.id)}">
+            View all ${comments.length} comments
+          </button>
+        ` : ""}
+        ${latestComment ? `
+          <div class="comment-preview-bubble">
+            ${face(latestComment.author)}
+            <div class="bubble-content">
+              <strong>${esc(latestComment.author?.name || 'Family')}</strong>
+              <span>${esc(latestComment.body || '')}</span>
+              ${latestComment.attachments?.length ? `
+                <div class="comment-mini-media">
+                  ${latestComment.attachments.map(a => `<img src="${esc(asset(a.path))}" alt="" data-action="open-post-modal" data-id="${esc(note.id)}">`).join('')}
+                </div>
+              ` : ''}
+            </div>
+          </div>
+        ` : ""}
+
+        <!-- Quick comment trigger -->
+        <div class="quick-comment-row" data-action="focus-comment" data-id="${esc(note.id)}">
+          ${state.user ? face(state.user) : `<span class="face-ph" aria-hidden="true">F</span>`}
+          <div class="quick-comment-input">Write a comment… <i class="bi bi-image"></i></div>
+        </div>
+      </div>
+    </article>
+  `;
+}
+
+function lightboxModal() {
+  const note = state.activeModalPost;
+  if (!note) return "";
+  const files = Array.isArray(note.attachments) ? note.attachments : [];
+  const visual = files.filter((item) => item.kind === "image" || item.kind === "video");
+  const docs = files.filter((item) => item.kind === "file");
+  const author = note.author || { name: "Family" };
+  const social = note.social || { likes: 0, stars: 0, liked: false, starred: false, comments: [] };
+  const comments = Array.isArray(social.comments) ? social.comments : [];
+  const currentIndex = Math.max(0, Math.min(state.lightboxMediaIndex || 0, Math.max(0, visual.length - 1)));
+  const currentMedia = visual[currentIndex];
+
+  const pickKey = `note:${note.id}`;
+  const stagedCommentPick = state.commentPicks?.[pickKey];
+
+  return `
+    <div class="lightbox-backdrop" data-action="close-lightbox-backdrop">
+      <div class="lightbox-dialog ${visual.length ? 'has-media' : 'no-media'}" role="dialog" aria-modal="true">
+        
+        <!-- Media Column (Left) -->
+        ${visual.length ? `
+          <div class="lightbox-media-col">
+            <div class="lightbox-media-viewport">
+              ${currentMedia.kind === "video" 
+                ? `<video src="${esc(asset(currentMedia.path))}" controls autoplay playsinline class="lightbox-full-video"></video>`
+                : `<img src="${esc(asset(currentMedia.path))}" alt="${esc(note.title || '')}" class="lightbox-full-image">`}
+              
+              ${visual.length > 1 ? `
+                <button type="button" class="lightbox-nav-btn prev" data-action="lightbox-prev" aria-label="Previous photo">
+                  <i class="bi bi-chevron-left"></i>
+                </button>
+                <button type="button" class="lightbox-nav-btn next" data-action="lightbox-next" aria-label="Next photo">
+                  <i class="bi bi-chevron-right"></i>
+                </button>
+                <div class="lightbox-media-counter">${currentIndex + 1} / ${visual.length}</div>
+              ` : ""}
+            </div>
+            
+            ${visual.length > 1 ? `
+              <div class="lightbox-thumbs-strip">
+                ${visual.map((item, idx) => `
+                  <button type="button" class="lightbox-thumb-btn ${idx === currentIndex ? 'active' : ''}" data-action="lightbox-thumb" data-index="${idx}">
+                    ${item.kind === 'video' ? `<i class="bi bi-play-circle-fill" style="font-size:20px;color:white"></i>` : `<img src="${esc(asset(item.path))}" alt="">`}
+                  </button>
+                `).join('')}
+              </div>
+            ` : ""}
+          </div>
+        ` : ""}
+
+        <!-- Content & Comments Column (Right) -->
+        <div class="lightbox-content-col">
+          <!-- Top Bar -->
+          <div class="lightbox-header">
+            <div class="author-lockup">
+              ${face(author)}
+              <div>
+                <strong>${esc(author.name || "Family")}</strong>
+                <time>${esc(when(note.updatedAt))}</time>
+              </div>
+            </div>
+            <div class="lightbox-actions-top">
+              <button type="button" class="icon-btn-round" data-action="copy-post-link" data-id="${esc(note.id)}" title="Copy link">
+                <i class="bi bi-link-45deg"></i>
+              </button>
+              <button type="button" class="icon-btn-round" data-action="send-post-message" data-id="${esc(note.id)}" data-title="${esc(note.title || 'A note')}" title="Send in message">
+                <i class="bi bi-send"></i>
+              </button>
+              <button type="button" class="lightbox-close-btn" data-action="close-lightbox" aria-label="Close modal">
+                <i class="bi bi-x-lg"></i>
+              </button>
+            </div>
+          </div>
+
+          <!-- Post Content -->
+          <div class="lightbox-scroll-body">
+            ${note.title ? `<h2 class="lightbox-post-title">${esc(note.title)}</h2>` : ""}
+            <div class="lightbox-post-text">
+              <p>${esc(note.body || "").replace(/\n\n+/g, "</p><p>").replace(/\n/g, "<br>")}</p>
+            </div>
+
+            ${docs.length ? `
+              <div class="lightbox-file-list">
+                ${docs.map(doc => `
+                  <a class="file-chip" href="${esc(asset(doc.path))}" download="${esc(doc.name || 'file')}">
+                    <i class="bi bi-file-earmark-text"></i><span>${esc(doc.name || 'Recipe document')}</span>
+                  </a>
+                `).join('')}
+              </div>
+            ` : ""}
+
+            <!-- Post Reactions Bar -->
+            <div class="lightbox-stats-bar">
+              <span><i class="bi bi-heart-fill heart-glow"></i> <strong>${social.likes || 0}</strong> likes</span>
+              <span><strong>${comments.length}</strong> comments</span>
+            </div>
+
+            <div class="lightbox-button-bar">
+              <button type="button" class="social-action-btn ${social.liked ? 'is-liked' : ''}" data-action="react" data-kind="like" data-type="note" data-id="${esc(note.id)}">
+                <i class="bi ${social.liked ? 'bi-heart-fill' : 'bi-heart'}"></i>
+                <span>${social.liked ? 'Liked' : 'Like'}</span>
+              </button>
+              <button type="button" class="social-action-btn" data-action="share-post" data-id="${esc(note.id)}" data-title="${esc(note.title || 'A note')}">
+                <i class="bi bi-share"></i>
+                <span>Share</span>
+              </button>
+            </div>
+
+            <!-- Comments Stream -->
+            <div class="lightbox-comments-list">
+              <h4 class="comments-heading">Family Comments (${comments.length})</h4>
+              ${comments.length ? comments.map(comment => {
+                const cMine = state.user && String(comment.author?.id) === String(state.user.id);
+                const cFiles = Array.isArray(comment.attachments) ? comment.attachments : [];
+                return `
+                  <div class="lightbox-comment-item">
+                    ${face(comment.author)}
+                    <div class="comment-bubble-wrap">
+                      <div class="comment-bubble">
+                        <div class="comment-author-line">
+                          <strong>${esc(comment.author?.name || 'Family')}</strong>
+                          <time>${esc(when(comment.createdAt))}</time>
+                        </div>
+                        ${comment.body ? `<p class="comment-text">${esc(comment.body)}</p>` : ""}
+                        ${cFiles.length ? `
+                          <div class="comment-media-grid">
+                            ${cFiles.map(cf => cf.kind === 'video'
+                              ? `<video src="${esc(asset(cf.path))}" controls class="comment-inline-video"></video>`
+                              : `<img src="${esc(asset(cf.path))}" alt="" class="comment-inline-img" loading="lazy">`
+                            ).join('')}
+                          </div>
+                        ` : ""}
+                      </div>
+                      ${cMine ? `
+                        <button type="button" class="comment-delete-link" data-action="delete-comment" data-id="${esc(comment.id)}">Delete</button>
+                      ` : ""}
+                    </div>
+                  </div>
+                `;
+              }).join("") : `<p class="empty-comments">No comments yet.</p>`}
+            </div>
+          </div>
+
+          <!-- Bottom Comment Input Form with Media Picker -->
+          <div class="lightbox-comment-footer">
+            <form class="comment-form lightbox-form" data-type="note" data-id="${esc(note.id)}">
+              ${stagedCommentPick ? `
+                <div class="staged-comment-preview">
+                  <span>${stagedCommentPick.kind === 'video' ? '🎥 Video' : '📷 Photo'}: ${esc(stagedCommentPick.name)}</span>
+                  <button type="button" class="staged-remove-btn" data-action="drop-comment-pick" data-key="${esc(pickKey)}">×</button>
+                </div>
+              ` : ""}
+              <div class="comment-input-row">
+                ${state.user ? face(state.user) : `<span class="face-ph" aria-hidden="true">F</span>`}
+                <input name="body" placeholder="Write a comment with photo or video…" autocomplete="off" class="lightbox-comment-input">
+                <label class="comment-media-btn" title="Add photo">
+                  <i class="bi bi-camera"></i>
+                  <input type="file" accept="image/*" data-comment-file="image" hidden>
+                </label>
+                <label class="comment-media-btn" title="Add video">
+                  <i class="bi bi-camera-video"></i>
+                  <input type="file" accept="video/mp4,video/webm,video/quicktime,.mp4,.mov,.webm" data-comment-file="video" hidden>
+                </label>
+                <button type="submit" class="comment-send-btn" title="Send comment">
+                  <i class="bi bi-send-fill"></i>
+                </button>
+              </div>
+            </form>
+          </div>
+
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function shareDialog() {
+  const post = state.shareDialogPost;
+  if (!post) return "";
+  const postUrl = `${location.origin}${location.pathname}#/post/${post.id}`;
+  const shareText = `${post.title || "Family Recipe & Story"} from Lisa's Recipe Book`;
+  const encodedUrl = encodeURIComponent(postUrl);
+  const encodedText = encodeURIComponent(`${shareText}\n${postUrl}`);
+
+  return `
+    <div class="lightbox-backdrop share-backdrop" data-action="close-share-modal">
+      <div class="share-modal-dialog" role="dialog" aria-modal="true">
+        <div class="share-modal-header">
+          <div class="share-header-left">
+            <span class="share-sparkle-badge"><i class="bi bi-share-fill"></i></span>
+            <div>
+              <h3 class="share-title">Share with Family</h3>
+              <p class="share-subtitle">${esc(post.title || "Family post")}</p>
+            </div>
+          </div>
+          <button type="button" class="lightbox-close-btn" data-action="close-share-modal" aria-label="Close share dialog">
+            <i class="bi bi-x-lg"></i>
+          </button>
+        </div>
+
+        <div class="share-link-row">
+          <input readonly value="${esc(postUrl)}" class="share-url-box" id="share-link-input" onclick="this.select()">
+          <button type="button" class="btn share-copy-btn" data-action="copy-post-link" data-id="${esc(post.id)}">
+            <i class="bi bi-link-45deg"></i> Copy Link
+          </button>
+        </div>
+
+        <div class="share-options-grid">
+          <a class="share-option-tile sms" href="sms:?&body=${encodedText}">
+            <div class="share-tile-icon"><i class="bi bi-chat-dots-fill"></i></div>
+            <div class="share-tile-info">
+              <strong>Text Message</strong>
+              <span>Send via SMS</span>
+            </div>
+          </a>
+
+          <a class="share-option-tile whatsapp" href="https://api.whatsapp.com/send?text=${encodedText}" target="_blank" rel="noopener">
+            <div class="share-tile-icon"><i class="bi bi-whatsapp"></i></div>
+            <div class="share-tile-info">
+              <strong>WhatsApp</strong>
+              <span>Send in group chat</span>
+            </div>
+          </a>
+
+          <a class="share-option-tile email" href="mailto:?subject=${encodeURIComponent(post.title || "Lisa's Recipe Book Post")}&body=${encodedText}">
+            <div class="share-tile-icon"><i class="bi bi-envelope-fill"></i></div>
+            <div class="share-tile-info">
+              <strong>Email</strong>
+              <span>Send email letter</span>
+            </div>
+          </a>
+
+          <a class="share-option-tile desk" href="#/messages" data-action="close-share-modal">
+            <div class="share-tile-icon"><i class="bi bi-people-fill"></i></div>
+            <div class="share-tile-info">
+              <strong>Family Desk</strong>
+              <span>Open in messages</span>
+            </div>
+          </a>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function getActiveModalVisuals() {
+  if (!state.activeModalPost) return [];
+  const files = Array.isArray(state.activeModalPost.attachments) ? state.activeModalPost.attachments : [];
+  return files.filter(item => item.kind === "image" || item.kind === "video");
+}
+
+function openPostModal(id, mediaIndex = 0) {
+  const note = (state.notes || []).find((item) => String(item.id) === String(id));
+  if (!note) return;
+  state.activeModalPost = note;
+  state.lightboxMediaIndex = Number(mediaIndex) || 0;
+  if (!location.hash.startsWith("#/post/")) {
+    state.preModalHash = location.hash || "#/";
+    history.replaceState(null, "", `#/post/${note.id}`);
+  }
+  render();
+}
+
+function closePostModal() {
+  state.activeModalPost = null;
+  state.lightboxMediaIndex = 0;
+  if (location.hash.startsWith("#/post/")) {
+    history.replaceState(null, "", state.preModalHash || "#/");
+  }
+  render();
+}
+
+function openShareModal(post) {
+  state.shareDialogPost = post;
+  render();
+}
+
+function closeShareModal() {
+  state.shareDialogPost = null;
+  render();
+}
+
+function imageZoomModal() {
+  const img = state.zoomedImage;
+  if (!img) return "";
+  return `
+    <div class="lightbox-backdrop image-zoom-backdrop" data-action="close-zoom-image">
+      <div class="image-zoom-dialog" role="dialog" aria-modal="true">
+        <div class="image-zoom-header">
+          <div class="image-zoom-info">
+            <h3 class="image-zoom-title">${esc(img.title || "Recipe Photograph")}</h3>
+            <p class="image-zoom-credit"><i class="bi bi-camera-fill"></i> ${esc(img.credit || "Photograph for Lisa's Recipe Book")}</p>
+          </div>
+          <div class="image-zoom-actions">
+            <a class="btn quiet" href="${esc(img.src)}" download="${esc(img.title || 'photo')}.jpg" target="_blank" rel="noopener">
+              <i class="bi bi-download"></i> Save photo
+            </a>
+            <button type="button" class="lightbox-close-btn" data-action="close-zoom-image" aria-label="Close photo">
+              <i class="bi bi-x-lg"></i>
+            </button>
+          </div>
+        </div>
+        <div class="image-zoom-viewport">
+          <img src="${esc(img.src)}" alt="${esc(img.title || 'Photo')}" class="image-zoom-img">
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function notesView() {
+  const notes = state.notes || [];
+  return shell(`
+    <div class="social-feed-container">
+      <div class="birthday-hero-banner" style="margin-bottom:0">
+        <div class="birthday-hero-content">
+          <div class="birthday-sparkle">Notepad</div>
+          <h1 class="birthday-title">Notes, pictures, and videos</h1>
+          <p class="birthday-desc">
+            Share a kitchen moment, a photo, or a video with the family.
+          </p>
+        </div>
+      </div>
+
+      ${facebookComposer()}
+
+      <div class="social-stream-wrap">
+        ${notes.length ? notes.map(socialPostCard).join("") : `<p class="empty">No family notes yet. Be the first to post!</p>`}
+      </div>
     </div>
   `);
 }
 
-function face(user, options = {}) {
-  const picture = user?.avatar
-    ? `<img class="face" src="${esc(asset(user.avatar))}" alt="">`
-    : `<span class="face-ph">${esc((user?.name || "L").trim().slice(0, 1) || "L")}</span>`;
-  if (options.link === false || !user?.id) return picture;
-  const mine = state.user && String(user.id) === String(state.user.id);
-  const href = mine ? "#/profile" : `#/people/${encodeURIComponent(user.id)}`;
-  return `<a class="face-link" href="${href}" aria-label="${esc(user.name || "Profile")}">${picture}</a>`;
-}
-
-function iconPhoto() {
-  return `<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M5 5.5A2.5 2.5 0 0 1 7.5 3h9A2.5 2.5 0 0 1 19 5.5v13a2.5 2.5 0 0 1-2.5 2.5h-9A2.5 2.5 0 0 1 5 18.5v-13Zm2.1 10.7 2.4-3a.8.8 0 0 1 1.25 0l1.4 1.7 1.15-1.4a.8.8 0 0 1 1.24 0l2.15 2.6V5.5a.5.5 0 0 0-.5-.5h-9a.5.5 0 0 0-.5.5v10.7Zm1.5-6.4a1.35 1.35 0 1 0 0-2.7 1.35 1.35 0 0 0 0 2.7Z"/></svg>`;
-}
-
-function iconVideo() {
-  return `<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M4 7.2A2.2 2.2 0 0 1 6.2 5h7.1A2.2 2.2 0 0 1 15.5 7.2v9.6a2.2 2.2 0 0 1-2.2 2.2H6.2A2.2 2.2 0 0 1 4 16.8V7.2Zm13.2 1.7 2.2-1.4A1 1 0 0 1 21 8.4v7.2a1 1 0 0 1-1.6.8l-2.2-1.4V8.9Z"/></svg>`;
-}
-
-function iconFile() {
-  return `<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M7 3.5h6.2L19 9.2V19a1.5 1.5 0 0 1-1.5 1.5h-10A1.5 1.5 0 0 1 6 19V5a1.5 1.5 0 0 1 1-1.5Zm5.5 1.6V9h4.1l-4.1-3.9ZM8.2 12.2h7.6v1.4H8.2v-1.4Zm0 3h5.4v1.4H8.2v-1.4Z"/></svg>`;
-}
-
 function notePost(note, mode) {
-  const files = Array.isArray(note.attachments) ? note.attachments : [];
-  const visual = files.filter((item) => item.kind === "image" || item.kind === "video");
-  const docs = files.filter((item) => item.kind === "file");
-  const media = visual.map((item) => item.kind === "video"
-    ? filmCover(asset(item.path))
-    : `<img src="${esc(asset(item.path))}" alt="" loading="lazy" decoding="async">`).join("");
-  const chips = docs.map((item) => `<a class="file-chip" href="${esc(asset(item.path))}" download="${esc(item.name || "file")}">${iconFile()}<span>${esc(item.name || "File")}</span></a>`).join("");
-  const author = note.author || { name: "Family" };
-  const mine = state.user && String(note.author?.id) === String(state.user.id);
-  return `<article class="post" data-note="${esc(note.id)}">
-    <header>
-      ${face(author)}
-      <div>
-        <strong>${esc(author.name || "Family")}</strong>
-        <time>${esc(when(note.updatedAt))}</time>
-      </div>
-      ${mine ? `<div class="post-tools">
-        <button class="btn quiet" type="button" data-action="edit-note" data-id="${esc(note.id)}">Edit</button>
-        <button class="btn danger" type="button" data-action="delete-note" data-id="${esc(note.id)}">Delete</button>
-      </div>` : ""}
-    </header>
-    ${note.body ? `<p>${esc(note.body)}</p>` : ""}
-    ${media ? `<div class="post-media ${visual.length > 1 ? "many" : "one"}">${media}</div>` : ""}
-    ${chips ? `<div class="file-row">${chips}</div>` : ""}
-    <div class="post-actions">
-      ${reactBar("note", note.id, note.social)}
-      <div class="card-actions">${linkTools(pageLink("#/notes"), `${author.name || "Family"}: ${String(note.body || note.title || "A note").slice(0, 140)}`)}</div>
-    </div>
-    ${mode === "slide" ? slideTalk("note", note.id, note.social) : commentsBlock("note", note.id, note.social)}
-  </article>`;
+  return socialPostCard(note);
 }
 
 function slideTalk(type, id, social) {
@@ -1321,6 +2034,14 @@ function render() {
       state.worldMiss = String(current.more).replace(/^mealdb-/, "");
       ensureWorld(state.worldMiss);
     }
+  } else if (current.name === "shop") {
+    const openedShop = (state.shopProducts || []).find((item) => item.id === current.id);
+    document.title = current.id === "studio"
+      ? "Product studio · Lisa's Recipe Book"
+      : current.id === "cart"
+        ? "Cart · Lisa's Recipe Book"
+        : openedShop ? `${openedShop.title} · Lisa's Recipe Book` : "Shop · Lisa's Recipe Book";
+    html = shell(shopView(shopCtx()));
   } else if (current.name === "privacy") {
     document.title = "Privacy · Lisa's Recipe Book";
     html = privacyView();
@@ -1424,16 +2145,20 @@ function keptLink(url) {
   return Boolean(youtubeId(url) || hostedVideo(url));
 }
 
-async function refreshPrivate() {
-  if (!state.user) { state.notes = []; state.notesError = ""; state.library = []; state.people = []; return; }
+async function loadFeedNotes() {
   try {
     const notes = await api("/api/notes");
     state.notes = Array.isArray(notes.notes) ? notes.notes : [];
     state.notesError = "";
   } catch (error) {
-    state.notes = [];
-    state.notesError = error.message || "The notepad could not be loaded from the book.";
+    state.notes = state.notes || [];
+    state.notesError = error.message || "";
   }
+}
+
+async function refreshPrivate() {
+  await loadFeedNotes();
+  if (!state.user) { state.library = []; state.people = []; return; }
   const [library, people, recipes] = await Promise.all([
     api("/api/library"),
     api("/api/people"),
@@ -1445,6 +2170,25 @@ async function refreshPrivate() {
 }
 
 document.addEventListener("click", async (event) => {
+  const navAnchor = event.target.closest('a[href^="#"], a[href^="/#"]');
+  if (navAnchor && !navAnchor.getAttribute("download") && !navAnchor.getAttribute("target") && navAnchor.getAttribute("href") !== "#") {
+    const rawHref = navAnchor.getAttribute("href") || "";
+    const cleanHash = rawHref.startsWith("/#") ? rawHref.slice(1) : rawHref;
+    if (cleanHash.startsWith("#")) {
+      event.preventDefault();
+      location.hash = cleanHash;
+      state.reader = null;
+      state.menu = false;
+      state.cartOpen = false;
+      state.activeModalPost = null;
+      state.shareDialogPost = null;
+      state.zoomedImage = null;
+      deskNavigated();
+      render();
+      window.scrollTo({ top: 0, behavior: "smooth" });
+      return;
+    }
+  }
   const link = event.target.closest("#reader-body a");
   if (link) {
     event.preventDefault();
@@ -1461,9 +2205,18 @@ document.addEventListener("click", async (event) => {
   }
   const button = event.target.closest("[data-action], [data-cuisine], [data-shelf]");
   if (!button) return;
-  if (button.dataset.action === "more-notes") {
+  try {
+    if (await shopClick(button, shopCtx())) return;
+  } catch (error) {
+    say(error.message || "The shop hit a snag.");
+    return;
+  }
+  if (button.dataset.action === "more-notes" || button.dataset.action === "more-feed") {
+    const y = window.scrollY;
     state.homeNotes = (state.homeNotes || 3) + 3;
+    state.homePlates = (state.homePlates || 6) + 4;
     render();
+    window.scrollTo(0, y);
     return;
   }
   if (button.dataset.action === "jump-note") {
@@ -1490,6 +2243,117 @@ document.addEventListener("click", async (event) => {
   }
   const action = button.dataset.action;
   try {
+    if (action === "zoom-recipe-image") {
+      event.preventDefault();
+      event.stopPropagation();
+      const src = button.dataset.src;
+      const title = button.dataset.title || "Recipe Photograph";
+      const credit = button.dataset.credit || "Photograph for Lisa's Recipe Book";
+      if (src) {
+        state.zoomedImage = { src, title, credit };
+        render();
+      }
+      return;
+    }
+    if (action === "close-zoom-image") {
+      if (button.classList.contains("image-zoom-backdrop") && event.target !== button) return;
+      event.preventDefault();
+      state.zoomedImage = null;
+      render();
+      return;
+    }
+    if (action === "open-post-modal") {
+      event.preventDefault();
+      const id = button.dataset.id;
+      const mediaIdx = Number(button.dataset.mediaIndex || 0);
+      openPostModal(id, mediaIdx);
+      return;
+    }
+    if (action === "close-lightbox" || action === "close-lightbox-backdrop") {
+      if (action === "close-lightbox-backdrop" && event.target !== button) return;
+      event.preventDefault();
+      closePostModal();
+      return;
+    }
+    if (action === "lightbox-prev") {
+      event.preventDefault();
+      event.stopPropagation();
+      const visual = getActiveModalVisuals();
+      if (visual.length) {
+        state.lightboxMediaIndex = (state.lightboxMediaIndex - 1 + visual.length) % visual.length;
+        render();
+      }
+      return;
+    }
+    if (action === "lightbox-next") {
+      event.preventDefault();
+      event.stopPropagation();
+      const visual = getActiveModalVisuals();
+      if (visual.length) {
+        state.lightboxMediaIndex = (state.lightboxMediaIndex + 1) % visual.length;
+        render();
+      }
+      return;
+    }
+    if (action === "lightbox-thumb") {
+      event.preventDefault();
+      event.stopPropagation();
+      state.lightboxMediaIndex = Number(button.dataset.index || 0);
+      render();
+      return;
+    }
+    if (action === "copy-post-link") {
+      event.preventDefault();
+      event.stopPropagation();
+      const id = button.dataset.id;
+      const url = `${location.origin}${location.pathname}#/post/${id}`;
+      try {
+        await navigator.clipboard.writeText(url);
+        say("Link copied! Share it with the family.");
+      } catch {
+        say("Could not copy link automatically.");
+      }
+      return;
+    }
+    if (action === "send-post-message" || action === "share-post") {
+      event.preventDefault();
+      event.stopPropagation();
+      const id = button.dataset.id;
+      const note = (state.notes || []).find(n => String(n.id) === String(id)) || state.activeModalPost || { id, title: button.dataset.title || "Family Post" };
+      openShareModal(note);
+      return;
+    }
+    if (action === "close-share-modal") {
+      if (button.classList.contains("share-backdrop") && event.target !== button) return;
+      event.preventDefault();
+      closeShareModal();
+      return;
+    }
+    if (action === "focus-comment") {
+      event.preventDefault();
+      const id = button.dataset.id;
+      openPostModal(id);
+      setTimeout(() => {
+        const input = document.querySelector(".lightbox-comment-input");
+        if (input) input.focus();
+      }, 150);
+      return;
+    }
+    if (action === "filter-feed") {
+      event.preventDefault();
+      state.feedFilter = button.dataset.filter || "all";
+      render();
+      return;
+    }
+    if (action === "drop-comment-pick") {
+      event.preventDefault();
+      const key = button.dataset.key;
+      if (key && state.commentPicks) {
+        delete state.commentPicks[key];
+        render();
+      }
+      return;
+    }
     if (action === "post-note") {
       event.preventDefault();
       const form = button.closest("form");
@@ -1637,7 +2501,13 @@ document.addEventListener("click", async (event) => {
       say("Added to the book.");
       render();
     }
-    if (action === "retry-world") { state.worldMiss = ""; state.worldError = ""; render(); }
+    if (action === "retry-world") {
+      delete state.worldCache[route().id];
+      state.worldMiss = "";
+      state.worldError = "";
+      state.worldLoading = false;
+      render();
+    }
     if (action === "preview-ringer") {
       try { await previewCallSound(); }
       catch { say("The phone did not play that sound. Tap the page once and try again."); }
@@ -1761,12 +2631,13 @@ let noteBusy = false;
 async function postNote(form) {
   if (noteBusy) return;
   noteBusy = true;
-  const text = String(new FormData(form).get("body") || state.noteDraft || "").trim();
+  const formData = new FormData(form);
+  const text = String(formData.get("body") || state.noteDraft || "").trim();
+  const title = String(formData.get("title") || "").trim() || text.split("\n")[0].slice(0, 80) || "Family Story";
   const files = state.noteFiles.slice();
   try {
     if (state.editingNote) {
-      const payload = { body: text };
-      if (text) payload.title = text.split("\n")[0].slice(0, 80);
+      const payload = { body: text, title };
       const editingId = state.editingNote;
       const result = await api(`/api/notes/${editingId}`, { method: "PATCH", json: payload });
       const saved = result.note || {};
@@ -1789,18 +2660,18 @@ async function postNote(form) {
     render();
     const attachments = [];
     for (const item of files) {
-      const saved = await uploadPieces(item.file, item.name);
+      const saved = await uploadFileFast(item.file, item.name);
       const kind = item.kind === "video" || saved.kind === "video" ? "video" : item.kind === "image" || saved.kind === "image" ? "image" : "file";
       attachments.push({ path: saved.path, name: item.name, kind });
     }
-    const result = await api("/api/notes", { method: "POST", json: { body: text, attachments } });
+    const result = await api("/api/notes", { method: "POST", json: { title, body: text, attachments } });
     const note = {
       id: result.note?.id,
-      title: result.note?.title || text.split("\n")[0].slice(0, 80) || "Video",
+      title: result.note?.title || title,
       body: text,
       attachments: result.note?.attachments?.length ? result.note.attachments : attachments,
       updatedAt: result.note?.updatedAt || new Date().toISOString(),
-      author: result.note?.author || state.user,
+      author: result.note?.author || state.user || { name: "Family" },
       social: result.note?.social || { likes: 0, stars: 0, liked: false, starred: false, comments: [] }
     };
     files.forEach((item) => URL.revokeObjectURL(item.url));
@@ -1808,7 +2679,8 @@ async function postNote(form) {
     state.noteDraft = "";
     state.notePosting = false;
     state.notes = [note, ...state.notes.filter((item) => String(item.id) !== String(note.id))];
-    say("Posted.");
+    say("Post published to family board!");
+    render();
     refreshPrivate().then(() => render()).catch(() => {});
   } catch (error) {
     state.notePosting = false;
@@ -1825,6 +2697,7 @@ document.addEventListener("submit", async (event) => {
   const data = Object.fromEntries(new FormData(form).entries());
   try {
     if (await deskSubmit(form, data)) return;
+    if (await shopSubmit(form, shopCtx())) return;
     if (form.classList.contains("comment-form")) {
       const text = String(data.body || "").trim();
       const type = form.dataset.type;
@@ -1836,19 +2709,31 @@ document.addEventListener("submit", async (event) => {
       if (button) button.textContent = "Posting…";
       const attachments = [];
       if (picked?.file) {
-        const saved = await uploadPieces(picked.file, picked.name);
+        const saved = await uploadFileFast(picked.file, picked.name);
         const kind = picked.kind === "video" || saved.kind === "video" ? "video" : "image";
         attachments.push({ path: saved.path, name: picked.name, kind });
       }
       const result = await api("/api/comments", { method: "POST", json: { targetType: type, targetId: id, body: text, attachments } });
       delete state.commentPicks[key];
-      pushComment(type, id, result.comment || {
+      const newComment = result.comment || {
         id: `new-${Date.now()}`,
         body: text,
         attachments,
         createdAt: new Date().toISOString(),
-        author: state.user
-      });
+        author: state.user || { name: "Family" }
+      };
+      pushComment(type, id, newComment);
+      if (state.activeModalPost && String(state.activeModalPost.id) === String(id)) {
+        if (!state.activeModalPost.social) state.activeModalPost.social = { likes: 0, comments: [] };
+        if (!Array.isArray(state.activeModalPost.social.comments)) state.activeModalPost.social.comments = [];
+        if (!state.activeModalPost.social.comments.some(c => String(c.id) === String(newComment.id))) {
+          state.activeModalPost.social.comments.push(newComment);
+        }
+      }
+      form.reset();
+      const input = form.querySelector("input[name=body]");
+      if (input) input.value = "";
+      say("Comment added!");
       render();
       refreshPrivate().then(() => {
         if (type === "world" && route().name === "world") return ensureWorld(route().id);
@@ -1987,6 +2872,9 @@ function eachTarget(type, id, visit) {
   for (const note of state.notes) {
     if (type === "note" && String(note.id) === String(id)) note.social = visit(note.social);
   }
+  if (state.activeModalPost && type === "note" && String(state.activeModalPost.id) === String(id)) {
+    state.activeModalPost.social = visit(state.activeModalPost.social);
+  }
   for (const item of state.library) {
     if (type === "film" && String(item.id) === String(id)) item.social = visit(item.social);
   }
@@ -2110,16 +2998,21 @@ async function loadShelf() {
 }
 
 async function ensureWorld(id) {
+  const key = String(id || "");
   state.worldLoading = true;
   state.worldError = "";
   try {
-    const data = await api(`/api/world/${id}`);
-    state.worldCache[id] = data.recipe;
+    const data = await api(`/api/world/${encodeURIComponent(key)}`);
+    if (!data?.recipe?.title) throw new Error("That plate did not come back.");
+    state.worldCache[key] = data.recipe;
   } catch (error) {
-    state.worldError = error.message;
+    delete state.worldCache[key];
+    state.worldError = error.name === "TimeoutError"
+      ? "That plate is taking too long. Tap Try again."
+      : (error.message || "That plate did not open.");
   }
   state.worldLoading = false;
-  if (route().name === "world" && route().id === id) render();
+  if (route().name === "world" && String(route().id) === key) render();
 }
 
 function replaceRecipe(recipe) {
@@ -2517,10 +3410,10 @@ document.addEventListener("visibilitychange", () => {
 
 window.addEventListener("pageshow", () => tickTimer());
 
-if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js?v=4").catch(() => {});
+if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js?v=5").catch(() => {});
 restoreTimer();
-await rememberIfInstalled();
 offerInstall();
+rememberIfInstalled().catch(() => {});
 
 async function openSpokenFind(forced) {
   const params = new URLSearchParams(location.search);
@@ -2538,27 +3431,102 @@ async function openSpokenFind(forced) {
   }
 }
 
-const boot = await api("/api/health").then(() => api("/api/recipes")).catch((error) => ({ error }));
-if (boot.error) {
-  document.getElementById("app").innerHTML = `<p class="boot">${esc(boot.error)}</p>`;
-} else {
-  state.recipes = boot.recipes;
-  loadShelf();
-  try {
-    const me = await api("/api/auth/me");
-    state.user = me.user;
-    if (state.user) await refreshPrivate();
-  } catch { /* a guest can still read */ }
+// 1. Bind desk communications and render initial shell immediately
+try {
   bindDesk({ state, api, esc, go, say, face, render, route });
-  state.ringerName = await ringerLabel().catch(() => "");
-  setInterval(() => { deskTick().catch(() => {}); }, 2500);
-  await openSpokenFind();
-  window.launchQueue?.setConsumer?.((params) => {
-    try {
-      const next = new URL(params?.targetURL || "", location.origin);
-      const spoken = next.searchParams.get("find") || "";
-      if (spoken) openSpokenFind(spoken);
-    } catch { /* a bad launch just leaves the book where it is */ }
-  });
+} catch {}
+render();
+
+// 2. Load recipes, notes, and user data asynchronously
+async function bootApp() {
+  try {
+    const boot = await api("/api/recipes").catch(() => null);
+    if (boot?.recipes) {
+      state.recipes = boot.recipes;
+      render();
+    }
+  } catch (err) {
+    console.warn("Recipes load notice:", err);
+  }
+
+  try {
+    loadShelf().catch(() => {});
+  } catch {}
+
+  try {
+    await loadFeedNotes();
+    render();
+  } catch (err) {
+    console.warn("Notes load notice:", err);
+  }
+
+  try {
+    const me = await api("/api/auth/me").catch(() => null);
+    if (me?.user) {
+      state.user = me.user;
+      await refreshPrivate();
+      render();
+    }
+  } catch {}
+
+  try {
+    const initialRoute = route();
+    if (initialRoute.name === "post" && initialRoute.id) {
+      const match = (state.notes || []).find((n) => String(n.id) === String(initialRoute.id));
+      if (match) {
+        state.activeModalPost = match;
+        render();
+      }
+    }
+  } catch {}
+
+  try {
+    state.ringerName = await ringerLabel().catch(() => "");
+    setInterval(() => { deskTick().catch(() => {}); }, 2500);
+    await openSpokenFind();
+    window.launchQueue?.setConsumer?.((params) => {
+      try {
+        const next = new URL(params?.targetURL || "", location.origin);
+        const spoken = next.searchParams.get("find") || "";
+        if (spoken) openSpokenFind(spoken);
+      } catch {}
+    });
+  } catch {}
+
   render();
 }
+
+bootApp().catch((err) => {
+  console.error("bootApp caught:", err);
+  render();
+});
+
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") {
+    if (state.zoomedImage) {
+      state.zoomedImage = null;
+      render();
+      return;
+    }
+    if (state.shareDialogPost) {
+      state.shareDialogPost = null;
+      render();
+      return;
+    }
+    if (state.activeModalPost) {
+      closePostModal();
+      return;
+    }
+  }
+  if (state.activeModalPost) {
+    const visual = getActiveModalVisuals();
+    if (!visual.length) return;
+    if (e.key === "ArrowLeft") {
+      state.lightboxMediaIndex = (state.lightboxMediaIndex - 1 + visual.length) % visual.length;
+      render();
+    } else if (e.key === "ArrowRight") {
+      state.lightboxMediaIndex = (state.lightboxMediaIndex + 1) % visual.length;
+      render();
+    }
+  }
+});

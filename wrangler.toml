@@ -1,5 +1,6 @@
 name = "lisas-recipe-book"
 compatibility_date = "2026-09-27"
+compatibility_flags = ["nodejs_compat"]
 pages_build_output_dir = "public"
 
 [[d1_databases]]

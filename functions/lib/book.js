@@ -1,3 +1,4 @@
+import bcrypt from "bcryptjs";
 import { worldCatalog, worldRecipe } from "../../server/world.js";
 import { findCover, paintCover } from "../../server/cover.js";
 import { browse, watchClip } from "./browse.js";
@@ -5,6 +6,7 @@ import {
   addSignal, askHost, d1Desk, deskSnapshot, ensureDesk, getCall, listSignals, listThreads,
   placeCall, readThread, searchBook, sendMessage, setCall
 } from "../../server/desk.js";
+import { d1Shop, listProducts, placeOrder, quoteShipping, removeProduct, saveProduct } from "../../server/shop.js";
 
 function json(data, status = 200) {
   return Response.json(data, {
@@ -46,6 +48,7 @@ function base64UrlToBytes(value) {
 }
 
 async function hmac(secret, text) {
+  if (!secret) throw Object.assign(new Error("Sign-in is not set up on this book yet."), { status: 503 });
   const key = await crypto.subtle.importKey(
     "raw",
     new TextEncoder().encode(secret),
@@ -94,14 +97,13 @@ async function hashPassword(env, password) {
 }
 
 async function checkPassword(env, password, stored) {
-  if (stored.startsWith("hmac1:")) {
+  const hash = typeof stored === "string" ? stored : "";
+  if (!hash) return false;
+  if (hash.startsWith("hmac1:")) {
     const next = await hashPassword(env, password);
-    return sameBytes(new TextEncoder().encode(next), new TextEncoder().encode(stored));
+    return sameBytes(new TextEncoder().encode(next), new TextEncoder().encode(hash));
   }
-  if (stored.startsWith("$2")) {
-    const bcrypt = await import("bcryptjs");
-    return bcrypt.compare(password, stored);
-  }
+  if (hash.startsWith("$2")) return bcrypt.compare(password, hash);
   return false;
 }
 
@@ -337,7 +339,38 @@ async function route(request, env, url, parts) {
   if (first === "watch" && method === "GET") return watchLink(url);
 
   if (["desk", "messages", "calls", "search", "ask"].includes(first)) return deskRoute(request, env, method, first, second, third, url);
+  if (first === "shop") return shopApi(request, env, method, second, third);
 
+  return json({ error: "That page is not in the book." }, 404);
+}
+
+function shopResult(result) {
+  if (result?.error) return json({ error: result.error }, result.status || 400);
+  return json(result);
+}
+
+async function shopApi(request, env, method, second, third) {
+  const store = d1Shop(env.DB);
+  const url = new URL(request.url);
+  try {
+    if (second === "products" && !third && method === "GET") return json(await listProducts(store, url.searchParams.get("category") || "all"));
+    if (second === "products" && method === "POST" && !third) {
+      if (!await userFrom(env, request)) return json({ error: "Sign in first." }, 401);
+      return shopResult(await saveProduct(store, await readJson(request)));
+    }
+    if (second === "products" && third && method === "PATCH") {
+      if (!await userFrom(env, request)) return json({ error: "Sign in first." }, 401);
+      return shopResult(await saveProduct(store, await readJson(request), third));
+    }
+    if (second === "products" && third && method === "DELETE") {
+      if (!await userFrom(env, request)) return json({ error: "Sign in first." }, 401);
+      return json(await removeProduct(store, third));
+    }
+    if (second === "shipping-estimate" && method === "POST") return shopResult(await quoteShipping(store, await readJson(request)));
+    if (second === "checkout" && method === "POST") return shopResult(await placeOrder(store, await readJson(request), env));
+  } catch (error) {
+    return json({ error: "The shop hit a snag. Please try again." }, 500);
+  }
   return json({ error: "That page is not in the book." }, 404);
 }
 
@@ -420,9 +453,13 @@ async function login(request, env) {
   const email = String(body.email || "").trim().toLowerCase();
   const password = String(body.password || "");
   const user = await env.DB.prepare("SELECT * FROM users WHERE email = ?").bind(email).first();
-  if (!user || !(await checkPassword(env, password, user.password_hash))) {
-    return json({ error: "That email and password do not match." }, 401);
+  let ok = false;
+  try {
+    ok = Boolean(user) && await checkPassword(env, password, user.password_hash);
+  } catch {
+    throw Object.assign(new Error("Sign-in could not check that password. Try again in a moment."), { status: 503 });
   }
+  if (!user || !ok) return json({ error: "That email and password do not match." }, 401);
   return json({ token: await signToken(env, user.id), user: publicUser(user) });
 }
 
