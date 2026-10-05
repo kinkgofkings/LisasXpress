@@ -2070,102 +2070,6 @@ function studio() {
       </div>
     </div>
 
-    <!-- YouTube Channel Profile Avatar Asset Kit -->
-    <div class="panel" style="background:#ffffff;border:2px solid #f48fb1;border-radius:24px;padding:24px;margin-bottom:28px;box-shadow:0 10px 30px rgba(216,27,96,0.1);">
-      <div style="display:flex;flex-wrap:wrap;align-items:center;gap:24px;">
-        <div style="text-align:center;flex:none;margin:0 auto;">
-          <img src="/youtube-avatar-800.png" alt="Lisa's Kitchen YouTube Avatar" style="width:160px;height:160px;border-radius:50%;box-shadow:0 8px 24px rgba(216,27,96,0.3);border:4px solid #ffd54f;display:block;margin:0 auto 10px;">
-          <span style="display:inline-block;font-size:12px;background:#fce4ec;color:#ad1457;padding:3px 10px;border-radius:999px;font-weight:700;">800 × 800 PNG</span>
-        </div>
-        <div style="flex:1;min-width:260px;">
-          <div style="display:inline-flex;align-items:center;gap:6px;font-size:12px;color:#ad1457;font-weight:700;margin-bottom:6px;">
-            <i class="bi bi-youtube"></i> Official Channel Profile Icon
-          </div>
-          <h3 style="margin:0 0 8px;font-family:var(--serif);font-size:22px;color:#880e4f;">YouTube Channel Avatar & Icon</h3>
-          <p style="margin:0 0 12px;font-size:14px;color:var(--muted);line-height:1.5;">
-            Designed specifically for YouTube's round avatar crop. Features Lisa's breast cancer survivor pink ribbon, golden chef's utensils, and warm kitchen branding.
-          </p>
-          <div style="background:#fff4f8;border:1px solid #f8bbd0;border-radius:12px;padding:12px 14px;margin-bottom:16px;font-size:13px;color:#4a2c3a;line-height:1.5;">
-            <strong>📱 On Phone:</strong> Touch & hold the image to the left, then tap <em>"Save to Photos"</em> or <em>"Download image"</em>.<br>
-            <strong>💻 On Computer:</strong> Right-click the image and select <em>"Save Image As..."</em>, or use the direct download buttons below:
-          </div>
-          <div style="display:flex;gap:10px;flex-wrap:wrap;">
-            <button type="button" class="btn moss" data-action="force-download-png" data-url="/api/download/youtube-avatar" data-filename="lisas-kitchen-youtube-avatar.png" style="font-weight:700;display:inline-flex;align-items:center;gap:8px;font-size:14px;padding:10px 18px;border-radius:12px;">
-              <i class="bi bi-download"></i> Download Avatar PNG (800×800)
-            </button>
-            <button type="button" class="btn quiet" data-action="force-download-png" data-url="/api/download/homescreen-icon" data-filename="lisas-kitchen-homescreen-512.png" style="font-weight:600;display:inline-flex;align-items:center;gap:6px;font-size:14px;padding:10px 16px;border-radius:12px;">
-              <i class="bi bi-phone"></i> Download App Icon (512×512)
-            </button>
-            <a class="btn quiet" href="/api/download/youtube-avatar" target="_blank" style="font-size:13px;padding:10px 14px;">Direct Link</a>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <!-- YouTube Channel Cover Banner Asset Kit -->
-    <div class="panel" style="background:#ffffff;border:2px solid #f48fb1;border-radius:24px;padding:24px;margin-bottom:28px;box-shadow:0 10px 30px rgba(216,27,96,0.1);">
-      <div style="margin-bottom:16px;">
-        <div style="display:inline-flex;align-items:center;gap:6px;font-size:12px;color:#ad1457;font-weight:700;margin-bottom:6px;">
-          <i class="bi bi-image"></i> Official Channel Cover Art
-        </div>
-        <h3 style="margin:0 0 8px;font-family:var(--serif);font-size:22px;color:#880e4f;">YouTube Channel Banner & Cover Image</h3>
-        <p style="margin:0;font-size:14px;color:var(--muted);line-height:1.5;">
-          Custom-designed to YouTube's exact recommended <strong>2560 × 1440</strong> banner specifications with a safe text zone for mobile, tablet, desktop, and TV screens.
-        </p>
-      </div>
-
-      <!-- Banner Preview Container with 16:9 Aspect Ratio -->
-      <div style="border-radius:16px;overflow:hidden;box-shadow:0 8px 24px rgba(0,0,0,0.15);border:2px solid #ffd54f;margin-bottom:16px;background:#260b14;">
-        <img src="/youtube-banner-2560.png" alt="Lisa's Kitchen YouTube Cover Banner" style="width:100%;height:auto;display:block;">
-      </div>
-
-      <div style="display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:14px;">
-        <div style="font-size:13px;color:var(--muted);">
-          <span>📐 Dimensions: <strong>2560 × 1440 pixels</strong></span> • <span style="color:#ad1457;font-weight:700;">Safe zone centered</span>
-        </div>
-        <div style="display:flex;gap:10px;flex-wrap:wrap;">
-          <button type="button" class="btn moss" data-action="force-download-png" data-url="/api/download/youtube-banner" data-filename="lisas-kitchen-youtube-banner.png" style="font-weight:700;display:inline-flex;align-items:center;gap:8px;font-size:14px;padding:10px 18px;border-radius:12px;">
-            <i class="bi bi-download"></i> Download Cover Banner PNG (2560×1440)
-          </button>
-          <a class="btn quiet" href="/api/download/youtube-banner" target="_blank" style="font-size:13px;padding:10px 14px;">Direct Link</a>
-        </div>
-      </div>
-    </div>
-
-    <!-- YouTube Channel Description & Bio Helper -->
-    <div class="panel" style="background:#fafafa;border:1px solid #e0e0e0;border-radius:20px;padding:22px;margin-bottom:28px;">
-      <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;margin-bottom:12px;">
-        <div>
-          <h4 style="margin:0;font-family:var(--serif);font-size:18px;color:#880e4f;display:flex;align-items:center;gap:8px;">
-            <i class="bi bi-file-text-fill" style="color:#d81b60;"></i> YouTube Channel "About" Description (Ready to Copy)
-          </h4>
-          <p style="margin:4px 0 0;font-size:13px;color:var(--muted);">Paste this directly into your YouTube Studio > Customization > Basic Info > Description.</p>
-        </div>
-        <button type="button" class="btn moss" data-action="copy-channel-desc" style="font-size:13px;padding:8px 16px;font-weight:700;display:inline-flex;align-items:center;gap:6px;">
-          <i class="bi bi-clipboard-check"></i> Copy Full Description
-        </button>
-      </div>
-      <div id="youtube-channel-desc-text" style="background:#fff;border:1px solid #ddd;border-radius:12px;padding:16px;font-size:14px;line-height:1.6;color:#333;white-space:pre-wrap;font-family:inherit;max-height:220px;overflow-y:auto;">Welcome to Lisa’s Kitchen Studio! 🎗️🍳
-
-I'm Lisa — Texas home cook, proud mama, and breast cancer survivor. Welcome to my kitchen for real scratch cooking, comforting family recipes, and healing food.
-
-✨ On this channel:
-• Southern & Cajun Classics: Sunday dark roux gumbo, Texas pot roast, skillet cobblers & cast iron comfort.
-• Garden & Pets: Raised bed gardening, fresh herbs, and wholesome homemade dog food & treats.
-• Survivor Wellness: Anti-inflammatory broths & comforting meals to nourish body & spirit.
-
-Pull up a chair and make yourself at home!
-
-❤️ Connect & Support:
-📖 Recipe Book App: https://ais-pre-75unafk6y3wgyyvj7ygfln-473048529424.us-east1.run.app
-☕ Cash App: $Yellow9859
-📬 Local Lubbock/Wolfforth Deliveries & Errands in app shop!
-
-Subscribe & tap the bell 🔔 to cook with me!
-
-#SurvivorKitchen #LisasKitchen #SouthernCooking #CajunCooking #BreastCancerSurvivor</div>
-    </div>
-
     <!-- Curated Video Section Header -->
     <div style="margin:32px 0 16px;">
       <div style="display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--moss);font-weight:700;margin-bottom:4px;">
@@ -2772,18 +2676,6 @@ document.addEventListener("click", async (event) => {
         say(`Saved ${filename}! 📷`);
       } catch (err) {
         window.location.href = url;
-      }
-      return;
-    }
-    if (action === "copy-channel-desc") {
-      event.preventDefault();
-      const descEl = document.getElementById("youtube-channel-desc-text");
-      if (descEl) {
-        navigator.clipboard.writeText(descEl.textContent.trim()).then(() => {
-          say("Copied YouTube Channel Description to clipboard! 📋");
-        }).catch(() => {
-          say("Please select the description text and copy.");
-        });
       }
       return;
     }
