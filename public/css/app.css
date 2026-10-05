@@ -2641,6 +2641,33 @@ body.menu-open { overflow: hidden; }
   border-radius: 12px;
 }
 
+/* Video Modal Theater Dialog & Gallery Lightbox Popouts */
+.video-modal-dialog {
+  animation: scaleUp 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.video-modal-dialog:fullscreen {
+  width: 100vw !important;
+  height: 100vh !important;
+  max-width: 100vw !important;
+  max-height: 100vh !important;
+  border-radius: 0 !important;
+  padding: 16px !important;
+  background: #000 !important;
+}
+.gallery-media-card {
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+.gallery-media-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.18) !important;
+}
+.gallery-popout-btn:hover {
+  background: rgba(0, 0, 0, 0.55) !important;
+}
+.gallery-image-wrap:hover .plate-zoom-hint span {
+  background: rgba(216, 27, 96, 0.95) !important;
+}
+
 .appbar-item { font-size: 10px; }
 .appbar-item i { font-size: 18px; }
 .shop-badge {

@@ -2,6 +2,169 @@ import { attachCallMedia, bindDesk, callLayer, clearCallSound, deskAction, deskN
 import { loadCart, shopClick, shopSubmit, shopView, addRecipeIngredientsToCart } from "./shop.js?v=6";
 
 const API = window.APP_CONFIG?.apiBase || "";
+const LISA_CHANNEL_ID = "UCOQlqCabDLlzQEzlcHfvXzg";
+
+const DEFAULT_VIDEO_CHANNELS = [
+  {
+    id: "lisas-channel",
+    name: "Lisa's Kitchen Studio",
+    handle: "@LisasKitchenStudio",
+    tagline: "Homestyle Southern Traditions, Cajun Dark Roux & Survivor Kitchen",
+    url: "https://www.youtube.com/@LisasKitchenStudio",
+    ribbon: true,
+    isOfficial: true,
+    videos: [
+      {
+        id: "lisa-frito-pie",
+        title: "LOADED WALKING BAG FRITO PIE",
+        channel: "Lisa's Kitchen Studio",
+        duration: "Quick Tutorial",
+        youtube: "https://www.youtube.com/watch?v=_TwRwMX_pz0",
+        thumbnail: "https://i4.ytimg.com/vi/_TwRwMX_pz0/hqdefault.jpg",
+        category: "cooking",
+        recipeId: "loaded-walking-bag-frito-pie",
+        description: "Crunchy. Cheesy. Beefy. Legendary. Hot homemade beef chili and velvety RoTel queso ladled straight into snack-size Frito bags and loaded high with fixings."
+      }
+    ]
+  },
+  {
+    id: "cooking-channel",
+    name: "Southern & Cajun Kitchen Classics",
+    handle: "@SouthernCajunKitchen",
+    tagline: "Authentic Dark Roux, Braised Texas Comfort & Cast Iron Baking",
+    url: "https://www.youtube.com/@LisasKitchenStudio",
+    ribbon: false,
+    videos: [
+      {
+        id: "curated-gumbo",
+        title: "Cook Up Gumbo as Good as Grandma's",
+        channel: "Smokin' & Grillin with AB",
+        duration: "21:30",
+        youtube: "https://www.youtube.com/watch?v=hNOG_FzUMIE",
+        thumbnail: "https://img.youtube.com/vi/hNOG_FzUMIE/hqdefault.jpg",
+        category: "cooking",
+        recipeId: "chicken-sausage-gumbo",
+        description: "Learn how to stir a deep chocolate roux, sweat the holy trinity, and simmer rich Cajun chicken and sausage gumbo to perfection."
+      },
+      {
+        id: "curated-pot-roast",
+        title: "Best Tender Chuck Pot Roast & Pan Gravy",
+        channel: "Natasha's Kitchen",
+        duration: "10:45",
+        youtube: "https://www.youtube.com/watch?v=Go8b1Cpjr84",
+        thumbnail: "https://img.youtube.com/vi/Go8b1Cpjr84/hqdefault.jpg",
+        category: "cooking",
+        recipeId: "sunday-pot-roast",
+        description: "Fall-apart tender beef chuck roast seared and braised slow in rich red wine and beef broth with sweet carrots and tender potatoes."
+      },
+      {
+        id: "curated-peach-cobbler",
+        title: "Easy Southern Homemade Peach Cobbler",
+        channel: "Preppy Kitchen",
+        duration: "8:50",
+        youtube: "https://www.youtube.com/watch?v=A_i71qdBnvw",
+        thumbnail: "https://img.youtube.com/vi/A_i71qdBnvw/hqdefault.jpg",
+        category: "cooking",
+        recipeId: "peach-cobbler",
+        description: "Warm, sweet spiced peaches bubbling under a golden, tender homemade biscuit crust. A true Sunday dinner staple."
+      }
+    ]
+  },
+  {
+    id: "gardening-channel",
+    name: "Raised Beds & Backyard Kitchen Garden",
+    handle: "@KitchenGardenGuides",
+    tagline: "Growing Your Own Herbs, Heirloom Tomatoes & Garden-to-Table Pickling",
+    url: "https://www.youtube.com/@LisasKitchenStudio",
+    ribbon: false,
+    videos: [
+      {
+        id: "curated-raised-beds",
+        title: "7 Raised Bed Gardening Hacks You'll Wish You Knew Sooner",
+        channel: "Next Level Gardening",
+        duration: "14:12",
+        youtube: "https://www.youtube.com/watch?v=gomWBqoOzzE",
+        thumbnail: "https://img.youtube.com/vi/gomWBqoOzzE/hqdefault.jpg",
+        category: "gardening",
+        description: "Essential raised bed tips: the best soil mixture, watering hacks, spacing vegetables, and growing fragrant kitchen herbs."
+      },
+      {
+        id: "curated-pickling",
+        title: "How to Make the Best Ever Homemade Dill Pickles",
+        channel: "Better Homes and Gardens",
+        duration: "6:24",
+        youtube: "https://www.youtube.com/watch?v=I_bR01qzQxs",
+        thumbnail: "https://img.youtube.com/vi/I_bR01qzQxs/hqdefault.jpg",
+        category: "gardening",
+        description: "Step-by-step garden cucumber canning: garlic dill brine, keeping your pickles crunchy, and simple water-bath processing."
+      }
+    ]
+  },
+  {
+    id: "pets-channel",
+    name: "The Pet Connection: Healthy Dog Meals & Treats",
+    handle: "@HealthyPupsKitchen",
+    tagline: "Veterinarian-Safe Cooked Dog Meals, Bone Broths & Homemade Canine Biscuits",
+    url: "https://www.youtube.com/@LisasKitchenStudio",
+    ribbon: false,
+    videos: [
+      {
+        id: "curated-dog-meal",
+        title: "Complete & Balanced Homemade Fresh Dog Meals",
+        channel: "PetCubes Official",
+        duration: "11:05",
+        youtube: "https://www.youtube.com/watch?v=iP2vIXn6208",
+        thumbnail: "https://img.youtube.com/vi/iP2vIXn6208/hqdefault.jpg",
+        category: "pets",
+        recipeId: "dog-meal-week",
+        description: "Nutritionist-formulated, gentle homemade dog food with lean protein, wholesome vegetables, and natural calcium for daily health."
+      },
+      {
+        id: "curated-dog-treats",
+        title: "3 Healthy Homemade Dog Treat Recipes",
+        channel: "Bigger Bolder Baking with Gemma Stafford",
+        duration: "7:45",
+        youtube: "https://www.youtube.com/watch?v=OpCNt3qFYpc",
+        thumbnail: "https://img.youtube.com/vi/OpCNt3qFYpc/hqdefault.jpg",
+        category: "pets",
+        recipeId: "pumpkin-dog-biscuits",
+        description: "Wholesome 3-ingredient dog treats made with pure pumpkin and dog-safe peanut butter for crunchy, tail-wagging snacks."
+      }
+    ]
+  },
+  {
+    id: "survivor-channel",
+    name: "Survivor Kitchen & Healing Foods",
+    handle: "@SurvivorKitchen",
+    tagline: "Anti-Inflammatory Broths, Restorative Comfort & Nourishing Meals",
+    url: "https://www.youtube.com/@LisasKitchenStudio",
+    ribbon: true,
+    videos: [
+      {
+        id: "curated-healing-broth",
+        title: "Ultimate Anti-Inflammatory Bone Broth for Gut & Immunity",
+        channel: "The Doctor's Kitchen",
+        duration: "12:18",
+        youtube: "https://www.youtube.com/watch?v=4iswJTdV-oo",
+        thumbnail: "https://img.youtube.com/vi/4iswJTdV-oo/hqdefault.jpg",
+        category: "wellness",
+        recipeId: "healing-bone-broth",
+        description: "Nutrient-dense, slow-simmered bone broth rich in collagen, ginger, turmeric, and healing root aromatics to support recovery and gut health."
+      },
+      {
+        id: "curated-golden-milk",
+        title: "Golden Milk Recipe for Rest & Anti-Inflammation",
+        channel: "Sasu Flavas",
+        duration: "5:32",
+        youtube: "https://www.youtube.com/watch?v=6GUhYp0cs9w",
+        thumbnail: "https://img.youtube.com/vi/6GUhYp0cs9w/hqdefault.jpg",
+        category: "wellness",
+        description: "Warm, soothing golden turmeric milk with cinnamon and black pepper for maximum curcumin absorption, restful sleep, and comfort."
+      }
+    ]
+  }
+];
+
 const state = {
   user: null,
   recipes: [],
@@ -14,7 +177,7 @@ const state = {
   recording: null,
   fontSize: localStorage.getItem("lisa-font-size") || "regular",
   activeVideo: null,
-  videoChannels: [],
+  videoChannels: JSON.parse(JSON.stringify(DEFAULT_VIDEO_CHANNELS)),
   videoCategory: "all",
   videoLoading: false,
   recipeCache: {},
@@ -1064,11 +1227,48 @@ function recipeView(recipe) {
         <p class="credit clickable-credit" data-action="zoom-recipe-image" data-src="${esc(asset(recipe.image))}" data-title="${esc(recipe.title)}" data-credit="${esc(credit)}" title="Click to view full photo">
           <i class="bi bi-camera-fill"></i> ${esc(credit)}
         </p>
-        <div class="gallery">
-          ${(recipe.media || []).map((item) => `<figure>
-            ${item.kind === "video" ? `<video src="${esc(asset(item.path))}" controls></video>` : `<img src="${esc(asset(item.path))}" alt="${esc(item.caption || recipe.title)}">`}
-            ${state.user ? `<button class="btn quiet" data-action="delete-media" data-id="${recipe.id}" data-media="${item.id}">Remove</button>` : ""}
-          </figure>`).join("")}
+        <div class="gallery" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%, 180px), 1fr));gap:12px;margin-top:14px;">
+          ${(recipe.media || []).map((item) => {
+            const isVid = item.kind === "video";
+            return `
+            <figure class="gallery-media-card" style="margin:0;position:relative;border-radius:14px;overflow:hidden;background:#181818;box-shadow:0 4px 14px rgba(0,0,0,0.12);border:1px solid rgba(0,0,0,0.08);">
+              ${isVid ? `
+                <div class="gallery-video-wrap" style="position:relative;width:100%;height:140px;background:#000;overflow:hidden;">
+                  <video src="${esc(asset(item.path))}" style="width:100%;height:100%;object-fit:cover;" preload="metadata" playsinline muted></video>
+                  <button type="button" class="gallery-popout-btn" data-action="popout-recipe-media" data-id="${esc(item.id)}" data-kind="video" data-path="${esc(item.path)}" data-caption="${esc(item.caption || recipe.title)}" title="Pop out and enlarge video" style="position:absolute;inset:0;width:100%;height:100%;background:rgba(0,0,0,0.38);border:0;display:flex;flex-direction:column;align-items:center;justify-content:center;color:#fff;cursor:pointer;gap:6px;">
+                    <div style="width:44px;height:44px;border-radius:50%;background:#d81b60;display:flex;align-items:center;justify-content:center;box-shadow:0 4px 14px rgba(216,27,96,0.5);font-size:20px;">
+                      <i class="bi bi-play-fill" style="margin-left:3px;"></i>
+                    </div>
+                    <span style="font-size:11px;font-weight:700;background:rgba(0,0,0,0.75);padding:3px 10px;border-radius:999px;display:inline-flex;align-items:center;gap:4px;">
+                      <i class="bi bi-arrows-fullscreen"></i> Tap to Enlarge
+                    </span>
+                  </button>
+                </div>
+              ` : `
+                <div class="gallery-image-wrap" data-action="zoom-recipe-image" data-src="${esc(asset(item.path))}" data-title="${esc(item.caption || recipe.title)}" data-credit="${esc(recipe.title + ' Gallery Photo')}" style="position:relative;width:100%;height:140px;cursor:pointer;overflow:hidden;">
+                  <img src="${esc(asset(item.path))}" alt="${esc(item.caption || recipe.title)}" style="width:100%;height:100%;object-fit:cover;">
+                  <button type="button" class="plate-zoom-hint" data-action="zoom-recipe-image" data-src="${esc(asset(item.path))}" data-title="${esc(item.caption || recipe.title)}" data-credit="${esc(recipe.title + ' Gallery Photo')}" style="position:absolute;inset:0;width:100%;height:100%;background:rgba(0,0,0,0.2);border:0;display:flex;align-items:flex-end;justify-content:flex-end;padding:8px;color:#fff;cursor:pointer;">
+                    <span style="background:rgba(0,0,0,0.75);padding:3px 10px;border-radius:999px;font-size:11px;font-weight:700;display:inline-flex;align-items:center;gap:4px;">
+                      <i class="bi bi-arrows-fullscreen"></i> Tap to Zoom
+                    </span>
+                  </button>
+                </div>
+              `}
+              <div style="padding:8px 10px;background:var(--card);display:flex;align-items:center;justify-content:space-between;gap:6px;">
+                <span style="font-size:11px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:600;">
+                  ${isVid ? `<i class="bi bi-camera-video-fill" style="color:var(--moss);"></i> Video` : `<i class="bi bi-image" style="color:var(--moss);"></i> Photo`}
+                  ${item.caption ? ` • ${esc(item.caption)}` : ""}
+                </span>
+                <div style="display:flex;align-items:center;gap:4px;">
+                  <button type="button" class="btn quiet" data-action="${isVid ? 'popout-recipe-media' : 'zoom-recipe-image'}" data-id="${esc(item.id)}" data-kind="${item.kind}" data-path="${esc(item.path)}" data-src="${esc(asset(item.path))}" data-title="${esc(item.caption || recipe.title)}" data-credit="${esc(recipe.title + ' Gallery Photo')}" data-caption="${esc(item.caption || recipe.title)}" style="padding:3px 8px;font-size:11px;font-weight:700;">
+                    <i class="bi bi-arrows-fullscreen"></i> Enlarge
+                  </button>
+                  ${state.user ? `<button class="btn quiet" data-action="delete-media" data-id="${recipe.id}" data-media="${item.id}" style="padding:3px 6px;font-size:11px;">Remove</button>` : ""}
+                </div>
+              </div>
+            </figure>
+            `;
+          }).join("")}
         </div>
       </div>
       <div>
@@ -1111,7 +1311,21 @@ function recipeView(recipe) {
           <button class="btn moss" data-action="timer-start">${timer.running ? "Pause" : "Start"}</button>
           <button class="btn quiet" data-action="timer-reset">Reset</button>
         </div>
-        ${youtubeId(recipe.youtube) ? `<div class="watch"><iframe src="https://www.youtube-nocookie.com/embed/${esc(youtubeId(recipe.youtube))}?rel=0&playsinline=1" title="${esc(recipe.title)}" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; fullscreen" allowfullscreen></iframe></div>` : ""}
+        ${youtubeId(recipe.youtube) ? `
+          <div class="recipe-youtube-theater" style="margin:24px 0 20px;background:var(--card);border:2px solid #f48fb1;border-radius:20px;padding:16px;box-shadow:0 8px 24px rgba(216,27,96,0.1);">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px;">
+              <span style="font-size:13px;padding:4px 12px;background:#fce4ec;color:#ad1457;border-radius:999px;font-weight:700;display:inline-flex;align-items:center;gap:6px;">
+                <i class="bi bi-youtube" style="color:#ff0000;font-size:16px;"></i> Step-by-Step Video Tutorial
+              </span>
+              <button type="button" class="btn moss" data-action="popout-recipe-video" data-youtube="${esc(recipe.youtube)}" data-title="${esc(recipe.title)}" style="font-size:13px;padding:6px 14px;font-weight:700;display:inline-flex;align-items:center;gap:6px;">
+                <i class="bi bi-arrows-fullscreen"></i> Pop Out Theater Player
+              </button>
+            </div>
+            <div class="watch" style="border-radius:14px;overflow:hidden;box-shadow:0 4px 16px rgba(0,0,0,0.15);">
+              <iframe src="https://www.youtube.com/embed/${esc(youtubeId(recipe.youtube))}?enablejsapi=1&rel=0&playsinline=1" title="${esc(recipe.title)}" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowfullscreen></iframe>
+            </div>
+          </div>
+        ` : ""}
         ${reactBar(reactionTarget(recipe).type, reactionTarget(recipe).id, recipe.social)}
         ${commentsBlock(reactionTarget(recipe).type, reactionTarget(recipe).id, recipe.social)}
         <div class="recipe-cart-card" style="margin:20px 0;padding:16px 20px;background:linear-gradient(135deg, #fff0f5, #ffe4ec);border:1.5px solid #f48fb1;border-radius:18px;display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:12px;box-shadow:0 6px 20px rgba(216,27,96,0.08);">
@@ -1947,20 +2161,86 @@ function when(iso) {
   return date.toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 }
 
-async function loadChannels() {
-  if (state.videoLoading || state.videoChannels?.length) return;
+async function loadChannels(forceSync = false) {
   state.videoLoading = true;
   try {
-    const res = await api("/api/channels");
-    if (res?.channels) {
+    const endpoint = forceSync ? "/api/channels/sync" : "/api/channels";
+    const res = await api(endpoint).catch(() => null);
+    if (res?.channels?.length) {
       state.videoChannels = res.channels;
-      render();
     }
+    // Merge any locally saved custom videos
+    try {
+      const custom = JSON.parse(localStorage.getItem("lisa_custom_videos") || "[]");
+      const lisaChannel = state.videoChannels.find(c => c.id === "lisas-channel");
+      if (lisaChannel && custom.length) {
+        for (const cv of custom) {
+          if (!lisaChannel.videos.some(v => v.id === cv.id || (v.youtube && v.youtube === cv.youtube))) {
+            lisaChannel.videos.unshift(cv);
+          }
+        }
+      }
+    } catch {}
+    render();
   } catch (e) {
     console.warn("Could not load channels", e);
   } finally {
     state.videoLoading = false;
   }
+}
+
+async function syncLisaYouTube(interactive = true) {
+  if (interactive) say("Checking @LisasKitchenStudio for latest uploads... ⏳");
+  try {
+    const res = await api("/api/channels/sync").catch(() => null);
+    if (res?.channels?.length) {
+      state.videoChannels = res.channels;
+      render();
+      if (interactive) say("Synced with Lisa's YouTube channel! 🎬");
+      return;
+    }
+  } catch {}
+
+  try {
+    const rssUrl = `https://www.youtube.com/feeds/videos.xml?channel_id=${LISA_CHANNEL_ID}`;
+    const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(rssUrl)}`;
+    const feedRes = await fetch(proxyUrl, { signal: AbortSignal.timeout(6000) });
+    if (feedRes.ok) {
+      const xml = await feedRes.text();
+      const entries = xml.split("<entry>").slice(1);
+      const lisaChannel = state.videoChannels.find(c => c.id === "lisas-channel");
+      let added = 0;
+      if (lisaChannel) {
+        for (const entry of entries) {
+          const videoIdMatch = entry.match(/<yt:videoId>([^<]+)<\/yt:videoId>/);
+          const titleMatch = entry.match(/<title>([^<]+)<\/title>/);
+          const descMatch = entry.match(/<media:description>([\s\S]*?)<\/media:description>/);
+          const thumbMatch = entry.match(/<media:thumbnail url="([^"]+)"/);
+          if (videoIdMatch && titleMatch) {
+            const vId = videoIdMatch[1];
+            const exists = lisaChannel.videos.some(v => (v.youtube || "").includes(vId));
+            if (!exists) {
+              lisaChannel.videos.unshift({
+                id: `lisa-${vId}`,
+                title: titleMatch[1].trim(),
+                channel: "Lisa's Kitchen Studio",
+                duration: "YouTube Video",
+                youtube: `https://www.youtube.com/watch?v=${vId}`,
+                thumbnail: thumbMatch ? thumbMatch[1] : `https://img.youtube.com/vi/${vId}/hqdefault.jpg`,
+                category: "cooking",
+                description: descMatch ? descMatch[1].trim() : ""
+              });
+              added++;
+            }
+          }
+        }
+        render();
+        if (interactive) say(added > 0 ? `Found ${added} new video(s) on YouTube! 🎬` : "Lisa's YouTube videos are up to date! ✨");
+        return;
+      }
+    }
+  } catch {}
+  if (interactive) say("YouTube channel is up to date! ✨");
 }
 
 async function fetchSingleRecipe(id) {
@@ -1987,22 +2267,30 @@ function videoModal() {
   const ytId = youtubeId(vid.youtube || vid.url);
   return `
     <div class="scrim" data-action="close-video-modal" style="z-index:900;"></div>
-    <div class="video-modal-dialog" role="dialog" aria-modal="true" style="position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);width:min(94vw, 860px);max-height:92vh;overflow-y:auto;background:var(--card);border:2px solid var(--moss);border-radius:24px;padding:22px;z-index:910;box-shadow:0 24px 60px rgba(0,0,0,0.35);">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
-        <span style="font-size:12px;padding:4px 12px;background:#fce4ec;color:#ad1457;border-radius:999px;font-weight:700;display:inline-flex;align-items:center;gap:6px;">
-          <i class="bi bi-youtube"></i> ${esc(vid.channel || "Cooking Tutorial")}
-        </span>
-        <button class="btn quiet" type="button" data-action="close-video-modal" style="padding:6px 14px;"><i class="bi bi-x-lg"></i> Close</button>
+    <div class="video-modal-dialog" role="dialog" aria-modal="true" style="position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);width:min(95vw, 920px);max-height:94vh;overflow-y:auto;background:var(--card);border:2px solid #f48fb1;border-radius:24px;padding:20px;z-index:910;box-shadow:0 24px 70px rgba(0,0,0,0.45);">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px;">
+        <div style="display:flex;align-items:center;gap:8px;">
+          <span style="font-size:12px;padding:4px 12px;background:#fce4ec;color:#ad1457;border-radius:999px;font-weight:700;display:inline-flex;align-items:center;gap:6px;">
+            <i class="bi ${ytId ? 'bi-youtube' : 'bi-camera-video-fill'}"></i> ${esc(vid.channel || "Kitchen Video")}
+          </span>
+          <span style="font-size:12px;color:var(--muted);font-weight:600;">Theater Mode</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:6px;">
+          <button class="btn quiet" type="button" data-action="toggle-theater-fullscreen" style="padding:6px 12px;font-size:13px;font-weight:600;" title="Toggle Fullscreen">
+            <i class="bi bi-arrows-fullscreen"></i> Fullscreen
+          </button>
+          <button class="btn quiet" type="button" data-action="close-video-modal" style="padding:6px 14px;font-size:14px;font-weight:600;"><i class="bi bi-x-lg"></i> Close</button>
+        </div>
       </div>
-      <div style="position:relative;width:100%;aspect-ratio:16/9;background:#000;border-radius:16px;overflow:hidden;margin-bottom:16px;box-shadow:0 8px 24px rgba(0,0,0,0.2);">
-        ${ytId ? `<iframe style="position:absolute;top:0;left:0;width:100%;height:100%;border:0;" src="https://www.youtube.com/embed/${esc(ytId)}?enablejsapi=1&rel=0&playsinline=1" title="${esc(vid.title)}" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowfullscreen></iframe>` : `<video controls autoplay playsinline style="width:100%;height:100%;" src="${esc(asset(vid.url || vid.filePath))}"></video>`}
+      <div style="position:relative;width:100%;aspect-ratio:16/9;background:#000;border-radius:18px;overflow:hidden;margin-bottom:16px;box-shadow:0 10px 30px rgba(0,0,0,0.3);">
+        ${ytId ? `<iframe id="theater-iframe-player" style="position:absolute;top:0;left:0;width:100%;height:100%;border:0;" src="https://www.youtube.com/embed/${esc(ytId)}?enablejsapi=1&rel=0&playsinline=1&autoplay=1" title="${esc(vid.title)}" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowfullscreen></iframe>` : `<video id="theater-video-player" controls autoplay playsinline style="width:100%;height:100%;object-fit:contain;background:#000;" src="${esc(asset(vid.url || vid.filePath))}"></video>`}
       </div>
       <h3 style="font-size:22px;margin:0 0 8px;font-family:var(--serif);color:var(--ink);">${esc(vid.title)}</h3>
-      <p style="color:var(--muted);font-size:15px;margin:0 0 16px;line-height:1.6;">${esc(vid.description || vid.notes || "")}</p>
+      ${vid.description || vid.notes ? `<p style="color:var(--muted);font-size:15px;margin:0 0 16px;line-height:1.6;">${esc(vid.description || vid.notes)}</p>` : ""}
       <div style="padding-top:14px;border-top:1px solid var(--line);display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between;">
         <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
           ${vid.recipeId ? `<a class="btn moss" href="#/recipe/${esc(vid.recipeId)}" data-action="close-video-modal"><i class="bi bi-book"></i> Open Matching Recipe</a>` : ""}
-          ${vid.youtube || vid.url ? `<a class="btn quiet" href="${esc(vid.youtube || vid.url)}" target="_blank" rel="noopener" style="font-weight:600;"><i class="bi bi-box-arrow-up-right"></i> Open on YouTube</a>` : ""}
+          ${vid.youtube ? `<a class="btn quiet" href="${esc(vid.youtube)}" target="_blank" rel="noopener" style="font-weight:600;"><i class="bi bi-box-arrow-up-right"></i> Open on YouTube</a>` : (!ytId && (vid.url || vid.filePath) ? `<a class="btn quiet" href="${esc(asset(vid.url || vid.filePath))}" download target="_blank" rel="noopener" style="font-weight:600;"><i class="bi bi-download"></i> Download Video</a>` : "")}
         </div>
         <button class="btn quiet" type="button" data-action="close-video-modal" style="font-size:13px;">Done</button>
       </div>
@@ -2061,8 +2349,11 @@ function studio() {
         </div>
         <div style="display:flex;gap:10px;flex-wrap:wrap;">
           <a class="btn moss" href="https://www.youtube.com/@LisasKitchenStudio" target="_blank" rel="noopener" style="font-weight:700;display:inline-flex;align-items:center;gap:8px;">
-            <i class="bi bi-bell-fill"></i> Subscribe on YouTube
+            <i class="bi bi-youtube"></i> Visit @LisasKitchenStudio
           </a>
+          <button type="button" class="btn quiet" data-action="sync-youtube-feed" style="font-weight:600;display:inline-flex;align-items:center;gap:6px;">
+            <i class="bi bi-arrow-repeat"></i> Sync Channel
+          </button>
           <button type="button" class="btn quiet" data-action="camera-open" style="font-weight:600;display:inline-flex;align-items:center;gap:6px;">
             <i class="bi bi-camera-video"></i> Record a Video
           </button>
@@ -2161,10 +2452,18 @@ function studio() {
           <h4 style="margin:0 0 12px;font-size:17px;display:flex;align-items:center;gap:8px;">
             <i class="bi bi-youtube" style="color:#ff0000;"></i> Link YouTube Video to Recipe
           </h4>
-          <div class="field"><label>Video Title<input name="title" required placeholder="e.g. Grandma's Gumbo Tutorial"></label></div>
-          <div class="field"><label>YouTube Video Link<input name="url" required placeholder="https://youtube.com/watch?v=..."></label></div>
-          <div class="field"><label>Notes & Creator Tips<textarea name="notes" rows="3" placeholder="Tell viewers what to watch for or how to prep."></textarea></label></div>
-          <button class="btn moss" type="submit" style="font-weight:700;">Save YouTube Video</button>
+          <div class="field" style="margin-bottom:12px;">
+            <label style="font-size:13px;font-weight:600;">Choose Recipe in Book to Attach Video to:
+              <select name="recipeId" id="link-video-recipe-select" data-action="pick-link-recipe" style="margin-top:4px;">
+                <option value="">No recipe attached (standalone Studio video)</option>
+                ${state.recipes.map(r => `<option value="${esc(r.id)}" ${r.id === "loaded-walking-bag-frito-pie" ? "selected" : ""}>${esc(r.title)}</option>`).join("")}
+              </select>
+            </label>
+          </div>
+          <div class="field"><label>Video Title<input name="title" id="link-video-title" required placeholder="e.g. LOADED WALKING BAG FRITO PIE" value="LOADED WALKING BAG FRITO PIE"></label></div>
+          <div class="field"><label>YouTube Video Link<input name="url" id="link-video-url" required placeholder="https://youtube.com/watch?v=..." value="https://www.youtube.com/watch?v=_TwRwMX_pz0"></label></div>
+          <div class="field"><label>Notes & Creator Tips<textarea name="notes" id="link-video-notes" rows="3" placeholder="Tell viewers what to watch for or how to prep.">Crunchy. Cheesy. Beefy. Legendary. Hot homemade beef chili and velvety RoTel queso ladled straight into individual Frito snack bags.</textarea></label></div>
+          <button class="btn moss" type="submit" style="font-weight:700;">Save & Link YouTube Video</button>
         </form>
       </div>
 
@@ -2585,6 +2884,11 @@ document.addEventListener("click", async (event) => {
     }
     return;
   }
+  if (button.dataset.action === "sync-youtube-feed") {
+    event.preventDefault();
+    await syncLisaYouTube(true);
+    return;
+  }
   if (button.closest("a.card")) event.preventDefault();
   if (button.dataset.cuisine) { state.cuisine = button.dataset.cuisine; render(); return; }
   if (button.dataset.shelf) {
@@ -2653,7 +2957,64 @@ document.addEventListener("click", async (event) => {
     }
     if (action === "close-video-modal") {
       event.preventDefault();
+      if (document.fullscreenElement) {
+        document.exitFullscreen?.().catch(() => {});
+      }
       state.activeVideo = null;
+      render();
+      return;
+    }
+    if (action === "toggle-theater-fullscreen") {
+      event.preventDefault();
+      const dlg = document.querySelector(".video-modal-dialog");
+      const videoEl = document.querySelector("#theater-video-player");
+      const target = dlg || videoEl;
+      if (!document.fullscreenElement) {
+        (target?.requestFullscreen?.() || videoEl?.webkitEnterFullscreen?.())?.catch?.(() => {});
+      } else {
+        document.exitFullscreen?.().catch(() => {});
+      }
+      return;
+    }
+    if (action === "popout-recipe-media") {
+      event.preventDefault();
+      event.stopPropagation();
+      const kind = button.dataset.kind;
+      const path = button.dataset.path;
+      const caption = button.dataset.caption || "Cooking Video";
+      if (kind === "video") {
+        state.activeVideo = {
+          id: `media-${button.dataset.id || Date.now()}`,
+          title: caption,
+          url: path,
+          channel: "Mom's Kitchen Video",
+          description: caption,
+          recipeId: route().id
+        };
+        render();
+      } else {
+        state.zoomedImage = {
+          src: asset(path),
+          title: caption,
+          credit: "Recipe Photograph"
+        };
+        render();
+      }
+      return;
+    }
+    if (action === "popout-recipe-video") {
+      event.preventDefault();
+      event.stopPropagation();
+      const ytUrl = button.dataset.youtube;
+      const title = button.dataset.title || "Video Tutorial";
+      state.activeVideo = {
+        id: "recipe-yt-popout",
+        title: `${title} - Step-by-Step Tutorial`,
+        youtube: ytUrl,
+        channel: "Lisa's Kitchen Studio",
+        description: `Watch the full step-by-step video tutorial for ${title}.`,
+        recipeId: route().id
+      };
       render();
       return;
     }
@@ -3001,6 +3362,21 @@ document.addEventListener("input", (event) => {
 
 document.addEventListener("change", async (event) => {
   const input = event.target;
+  if (input instanceof HTMLSelectElement && input.dataset.action === "pick-link-recipe") {
+    const recipeId = input.value;
+    const recipe = state.recipes.find(r => r.id === recipeId);
+    const titleInput = document.getElementById("link-video-title");
+    const urlInput = document.getElementById("link-video-url");
+    if (recipe) {
+      if (titleInput && (!titleInput.value || titleInput.value.includes("Tutorial") || titleInput.value.includes("Video") || titleInput.value.includes("FRITO"))) {
+        titleInput.value = `Lisa's ${recipe.title} Tutorial`;
+      }
+      if (urlInput && !urlInput.value && recipe.youtube) {
+        urlInput.value = recipe.youtube;
+      }
+    }
+    return;
+  }
   if (input instanceof HTMLInputElement && input.dataset.commentFile) {
     const form = input.closest("form");
     const file = input.files?.[0];
@@ -3229,11 +3605,57 @@ document.addEventListener("submit", async (event) => {
     if (form.id === "link-form") {
       const url = String(data.url || "").trim();
       if (socialLink(url)) throw new Error("TikTok and Facebook stay out of the book. Use YouTube, or a video file you host.");
-      const kind = youtubeId(url) ? "youtube" : hostedVideo(url) ? "hosted" : "";
-      if (!kind) throw new Error("Paste a YouTube link, or a video file you host that ends in .mp4 or .webm.");
-      await api("/api/library", { method: "POST", json: { ...data, url, kind } });
-      await refreshPrivate();
-      say("Saved for later.");
+      const ytId = youtubeId(url);
+      const isHosted = hostedVideo(url);
+      if (!ytId && !isHosted) throw new Error("Paste a YouTube link (e.g. https://www.youtube.com/watch?v=... or https://youtu.be/...).");
+
+      const title = String(data.title || "").trim() || "Lisa's Cooking Tutorial";
+      const recipeId = String(data.recipeId || "").trim();
+      const notes = String(data.notes || "").trim();
+
+      const newVid = {
+        id: `lisa-${ytId || Date.now()}`,
+        title,
+        channel: "Lisa's Kitchen Studio",
+        duration: "Tutorial",
+        youtube: url,
+        thumbnail: ytId ? `https://img.youtube.com/vi/${ytId}/hqdefault.jpg` : "/images/garden-to-table.jpg",
+        category: "cooking",
+        recipeId: recipeId || undefined,
+        description: notes || "Featured video from Lisa's Kitchen Studio."
+      };
+
+      // 1. Add to Lisa's channel in state.videoChannels immediately
+      const ch = state.videoChannels.find(c => c.id === "lisas-channel");
+      if (ch) {
+        if (!Array.isArray(ch.videos)) ch.videos = [];
+        const exists = ch.videos.some(v => (v.youtube || "").includes(ytId || url));
+        if (!exists) ch.videos.unshift(newVid);
+      }
+
+      // 2. Link to selected recipe in state.recipes
+      if (recipeId) {
+        const target = state.recipes.find(r => r.id === recipeId);
+        if (target) {
+          target.youtube = url;
+          if (state.recipeCache?.[recipeId]) state.recipeCache[recipeId].youtube = url;
+        }
+      }
+
+      // 3. Persist in localStorage so it never disappears on refresh
+      try {
+        const savedCustom = JSON.parse(localStorage.getItem("lisa_custom_videos") || "[]");
+        savedCustom.unshift(newVid);
+        localStorage.setItem("lisa_custom_videos", JSON.stringify(savedCustom.slice(0, 50)));
+      } catch {}
+
+      // 4. Attempt background backend sync without crashing on 401 or 500
+      try {
+        await api("/api/channels/link-recipe", { method: "POST", json: { title, url, recipeId, notes } }).catch(() => null);
+        await api("/api/library", { method: "POST", json: { title, url, kind: "youtube", description: notes, notes } }).catch(() => null);
+      } catch {}
+
+      say(recipeId ? "Video linked to recipe and added to Lisa's Studio! 🎬" : "Video added to Lisa's Kitchen Studio! 🎬");
       render();
     }
     if (form.id === "film-form") {
@@ -3867,7 +4289,12 @@ async function openSpokenFind(forced) {
   }
 }
 
-// 1. Bind desk communications and render initial shell immediately
+// 1. Bind desk communications and hydrate cached data immediately
+try {
+  const cachedRecipes = JSON.parse(localStorage.getItem("lisa_recipes_cache") || "[]");
+  if (cachedRecipes?.length) state.recipes = cachedRecipes;
+} catch {}
+
 try {
   bindDesk({ state, api, esc, go, say, face, render, route });
 } catch {}
@@ -3877,8 +4304,9 @@ render();
 async function bootApp() {
   try {
     const boot = await api("/api/recipes").catch(() => null);
-    if (boot?.recipes) {
+    if (boot?.recipes?.length) {
       state.recipes = boot.recipes;
+      try { localStorage.setItem("lisa_recipes_cache", JSON.stringify(boot.recipes)); } catch {}
       render();
     }
   } catch (err) {
@@ -3890,7 +4318,10 @@ async function bootApp() {
   } catch {}
 
   try {
-    loadChannels().catch(() => {});
+    loadChannels().then(() => {
+      // Auto-check Lisa's YouTube channel in background
+      syncLisaYouTube(false).catch(() => {});
+    }).catch(() => {});
   } catch {}
 
   try {

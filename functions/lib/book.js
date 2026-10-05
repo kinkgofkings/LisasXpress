@@ -24,6 +24,8 @@ function cuisineOf(value) {
   return "texas";
 }
 
+const LISA_CHANNEL_ID = "UCOQlqCabDLlzQEzlcHfvXzg";
+
 const VIDEO_CHANNELS = [
   {
     id: "lisas-channel",
@@ -33,7 +35,19 @@ const VIDEO_CHANNELS = [
     url: "https://www.youtube.com/@LisasKitchenStudio",
     ribbon: true,
     isOfficial: true,
-    videos: []
+    videos: [
+      {
+        id: "lisa-frito-pie",
+        title: "LOADED WALKING BAG FRITO PIE",
+        channel: "Lisa's Kitchen Studio",
+        duration: "Quick Tutorial",
+        youtube: "https://www.youtube.com/watch?v=_TwRwMX_pz0",
+        thumbnail: "https://i4.ytimg.com/vi/_TwRwMX_pz0/hqdefault.jpg",
+        category: "cooking",
+        recipeId: "loaded-walking-bag-frito-pie",
+        description: "Crunchy. Cheesy. Beefy. Legendary. Hot homemade beef chili and velvety RoTel queso ladled straight into snack-size Frito bags and loaded high with fixings."
+      }
+    ]
   },
   {
     id: "cooking-channel",
@@ -484,7 +498,9 @@ async function route(request, env, url, parts) {
   if (first === "world" && second && !third && method === "GET") return worldOne(request, env, second);
   if (first === "world" && third === "keep" && method === "POST") return worldKeep(request, env, second);
 
-  if (first === "channels" && method === "GET") return json({ channels: VIDEO_CHANNELS });
+  if (first === "channels" && !second && method === "GET") return json({ channels: VIDEO_CHANNELS });
+  if (first === "channels" && second === "sync" && method === "GET") return syncChannels(request, env);
+  if (first === "channels" && second === "link-recipe" && method === "POST") return linkChannelRecipe(request, env);
 
   if (first === "browse" && method === "GET") return openBrowse(url);
   if (first === "watch" && method === "GET") return watchLink(url);
@@ -1550,4 +1566,91 @@ async function openBrowse(url) {
   } catch (error) {
     return json({ error: error.status ? error.message : "That page could not be opened." }, error.status || 500);
   }
+}
+
+async function syncChannels(request, env) {
+  try {
+    const feedRes = await fetch(`https://www.youtube.com/feeds/videos.xml?channel_id=${LISA_CHANNEL_ID}`, {
+      headers: { "User-Agent": "Mozilla/5.0" },
+      signal: AbortSignal.timeout(6000)
+    });
+    if (feedRes.ok) {
+      const xml = await feedRes.text();
+      const entries = xml.split("<entry>").slice(1);
+      const lisaChannel = VIDEO_CHANNELS.find(c => c.id === "lisas-channel");
+      if (lisaChannel) {
+        for (const entry of entries) {
+          const videoIdMatch = entry.match(/<yt:videoId>([^<]+)<\/yt:videoId>/);
+          const titleMatch = entry.match(/<title>([^<]+)<\/title>/);
+          const descMatch = entry.match(/<media:description>([\s\S]*?)<\/media:description>/);
+          const thumbMatch = entry.match(/<media:thumbnail url="([^"]+)"/);
+          if (videoIdMatch && titleMatch) {
+            const vId = videoIdMatch[1];
+            const exists = lisaChannel.videos.some(v => (v.youtube || "").includes(vId));
+            if (!exists) {
+              lisaChannel.videos.unshift({
+                id: `lisa-${vId}`,
+                title: titleMatch[1].trim(),
+                channel: "Lisa's Kitchen Studio",
+                duration: "YouTube Video",
+                youtube: `https://www.youtube.com/watch?v=${vId}`,
+                thumbnail: thumbMatch ? thumbMatch[1] : `https://img.youtube.com/vi/${vId}/hqdefault.jpg`,
+                category: "cooking",
+                description: descMatch ? descMatch[1].trim() : ""
+              });
+            }
+          }
+        }
+      }
+    }
+  } catch (err) {
+    console.warn("YouTube sync notice:", err);
+  }
+  return json({ channels: VIDEO_CHANNELS });
+}
+
+async function linkChannelRecipe(request, env) {
+  const body = await readJson(request);
+  const link = String(body.url || "").trim();
+  const title = String(body.title || "Lisa's Video Tutorial").trim();
+  const recId = String(body.recipeId || "").trim();
+  const notes = String(body.notes || "").trim();
+
+  let ytId = "";
+  try {
+    const parsed = new URL(link);
+    const host = parsed.hostname.replace(/^www\./, "");
+    if (host === "youtu.be") ytId = parsed.pathname.split("/").filter(Boolean)[0] || "";
+    else if (host.endsWith("youtube.com") || host.endsWith("youtube-nocookie.com")) {
+      ytId = parsed.searchParams.get("v") || (parsed.pathname.match(/\/(?:embed|shorts|live)\/([^/?]+)/) || [])[1] || "";
+    }
+  } catch {}
+
+  const videoObj = {
+    id: `lisa-${ytId || Date.now()}`,
+    title,
+    channel: "Lisa's Kitchen Studio",
+    duration: "Tutorial",
+    youtube: link,
+    thumbnail: ytId ? `https://img.youtube.com/vi/${ytId}/hqdefault.jpg` : "/images/garden-to-table.jpg",
+    category: "cooking",
+    recipeId: recId || undefined,
+    description: notes || "Featured video from Lisa's Kitchen Studio."
+  };
+
+  const lisaChannel = VIDEO_CHANNELS.find(c => c.id === "lisas-channel");
+  if (lisaChannel) {
+    const exists = lisaChannel.videos.some(v => (v.youtube || "").includes(ytId || link));
+    if (!exists) lisaChannel.videos.unshift(videoObj);
+  }
+
+  if (recId) {
+    try {
+      await env.DB.prepare("UPDATE recipes SET youtube = ?, updated_at = ? WHERE id = ?").bind(link, new Date().toISOString(), recId).run();
+    } catch (e) {
+      console.warn("Recipe link update notice:", e);
+    }
+  }
+
+  return json({ ok: true, video: videoObj, channels: VIDEO_CHANNELS });
 }

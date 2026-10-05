@@ -504,6 +504,46 @@ const BOOK = [
     sourceTitle: "Frijoles charros"
   },
   {
+    id: "loaded-walking-bag-frito-pie",
+    title: "Loaded Walking Bag Frito Pie",
+    cuisine: "texas",
+    category: "Mains",
+    summary: "Crunchy, cheesy, beefy, legendary Texas comfort! Hot homemade beef chili and velvety RoTel queso ladled straight into individual snack bags of Fritos corn chips with all the fresh toppings.",
+    yieldText: "4–6 servings",
+    prepMinutes: 15,
+    cookMinutes: 20,
+    ingredients: [
+      "1 lb ground beef",
+      "1 small onion, diced",
+      "1 packet taco seasoning (or chili seasoning blend)",
+      "2 cans (10 oz each) RoTel diced tomatoes & green chilies (divided)",
+      "1 can (8 oz) tomato sauce",
+      "1/2 cup beef broth",
+      "16 oz Velveeta cheese, cubed",
+      "1 cup Pepper jack cheese, shredded",
+      "1/4 cup milk (or splash as needed for consistency)",
+      "Individual snack-size bags of Fritos Original Corn Chips",
+      "Shredded cheddar cheese",
+      "Sour cream",
+      "Pickled or fresh jalapeño slices",
+      "Diced red onion & fresh pico de gallo",
+      "Sliced green onions & hot sauce (optional)"
+    ],
+    steps: [
+      "Make the Chili: In a skillet over medium heat, brown the ground beef with diced onions until fully cooked. Drain excess grease. Stir in the taco seasoning, 1 can RoTel, tomato sauce, and beef broth. Bring to a simmer, lower heat, and cook until thickened.",
+      "Make the Queso: In a saucepan over low heat, combine the cubed Velveeta, shredded pepper jack, 1 can RoTel (undrained), and milk. Stir frequently until completely melted, creamy, and smooth.",
+      "Prep the Bags: Open individual snack bags of Fritos corn chips. Give each bag a gentle squeeze to slightly crush the chips so they hold the toppings well.",
+      "Load It Up: Ladle hot beef chili straight into each bag over the chips. Drizzle generously with creamy RoTel queso, then pile high with shredded cheddar, sour cream, jalapeños, diced red onion, pico de gallo, and green onions. Serve with a fork and enjoy!"
+    ],
+    notes: "Lisa's original recipe and video! Crunchy, cheesy, beefy perfection straight from the snack bag.",
+    image: "https://i4.ytimg.com/vi/_TwRwMX_pz0/hqdefault.jpg",
+    imageCredit: "Lisa's Kitchen Studio",
+    sourceUrl: "https://www.youtube.com/watch?v=_TwRwMX_pz0",
+    sourceTitle: "Lisa's Kitchen Studio on YouTube",
+    youtube: "https://www.youtube.com/watch?v=_TwRwMX_pz0",
+    family: 1
+  },
+  {
     id: "chicken-sausage-gumbo",
     title: "Chicken and Sausage Gumbo",
     cuisine: "cajun",
