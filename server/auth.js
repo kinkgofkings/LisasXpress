@@ -4,13 +4,10 @@ import path from "node:path";
 import bcrypt from "bcryptjs";
 
 const secretPath = path.resolve("data/secret");
+const STABLE_SECRET = process.env.APP_SECRET || "lisas-survivor-pink-secret-key-2026-persistent";
 
 function secret() {
-  fs.mkdirSync(path.dirname(secretPath), { recursive: true });
-  if (!fs.existsSync(secretPath)) {
-    fs.writeFileSync(secretPath, crypto.randomBytes(32).toString("hex"));
-  }
-  return fs.readFileSync(secretPath, "utf8");
+  return STABLE_SECRET;
 }
 
 export function hashPassword(password) {

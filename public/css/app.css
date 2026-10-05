@@ -2767,4 +2767,262 @@ body.menu-open { overflow: hidden; }
 .cart-line > div { flex: 1; min-width: 0; }
 .cart-line textarea { width: 100%; margin-top: 8px; }
 
+/* --- Breast Cancer Survivor Pink Ribbon Theme & Modern Cards --- */
+:root {
+  --survivor-pink: #ec4899;
+  --survivor-deep: #be185d;
+  --survivor-blush: #fdf2f8;
+  --survivor-border: rgba(236, 72, 153, 0.28);
+}
+
+.survivor-ribbon-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 10px;
+  background: #fce4ec;
+  border: 1px solid #f48fb1;
+  border-radius: 999px;
+  color: #ad1457;
+  font-weight: 700;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+/* Typography / Senior Eye Settings */
+.typography-switcher {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: #fff;
+  border: 1px solid var(--line);
+  padding: 3px 6px;
+  border-radius: 999px;
+  box-shadow: 0 2px 8px rgba(173, 20, 87, 0.08);
+}
+
+.typography-switcher .type-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  margin-right: 4px;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.typography-switcher .type-btn {
+  background: transparent;
+  border: 0;
+  padding: 4px 8px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--muted);
+  transition: all 0.15s ease;
+  line-height: 1;
+}
+
+.typography-switcher .type-btn:hover {
+  background: #fce4ec;
+  color: #880e4f;
+}
+
+.typography-switcher .type-btn.active {
+  background: #d81b60;
+  color: #fff;
+  box-shadow: 0 2px 6px rgba(216, 27, 96, 0.3);
+}
+
+/* Senior & High-Legibility Font Modes */
+[data-font-size="large"] {
+  font-size: 20px;
+}
+[data-font-size="large"] body {
+  font-size: 20px;
+  line-height: 1.6;
+}
+[data-font-size="large"] .card p,
+[data-font-size="large"] .recipe p,
+[data-font-size="large"] .recipe li {
+  font-size: 18px;
+  line-height: 1.65;
+}
+[data-font-size="large"] .btn {
+  padding: 12px 20px;
+  font-size: 16px;
+}
+
+[data-font-size="senior"] {
+  font-size: 23px;
+}
+[data-font-size="senior"] body {
+  font-size: 23px;
+  line-height: 1.7;
+}
+[data-font-size="senior"] .card p,
+[data-font-size="senior"] .recipe p,
+[data-font-size="senior"] .recipe li {
+  font-size: 21px;
+  line-height: 1.75;
+  color: #261621;
+}
+[data-font-size="senior"] .card h2,
+[data-font-size="senior"] .recipe h2,
+[data-font-size="senior"] .page-title {
+  font-size: clamp(32px, 5vw, 48px);
+  font-weight: 700;
+}
+[data-font-size="senior"] .btn {
+  padding: 14px 24px;
+  font-size: 18px;
+  min-height: 52px;
+}
+[data-font-size="senior"] input,
+[data-font-size="senior"] select,
+[data-font-size="senior"] textarea {
+  font-size: 18px;
+  padding: 12px 16px;
+}
+
+/* Modern Card Polish */
+.card.responsive-plate-card {
+  border-radius: 20px;
+  overflow: hidden;
+  border: 1px solid rgba(236, 72, 153, 0.2);
+  background: #ffffff;
+  box-shadow: 0 10px 30px rgba(173, 20, 87, 0.07);
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+.card.responsive-plate-card:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 16px 40px rgba(173, 20, 87, 0.14);
+  border-color: rgba(236, 72, 153, 0.45);
+}
+
+/* Video Channel Cards */
+.video-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 20px;
+  margin-top: 18px;
+}
+
+.video-card {
+  background: #ffffff;
+  border: 1px solid rgba(236, 72, 153, 0.22);
+  border-radius: 18px;
+  overflow: hidden;
+  box-shadow: 0 8px 24px rgba(173, 20, 87, 0.06);
+  display: flex;
+  flex-direction: column;
+  transition: transform 0.18s ease, box-shadow 0.18s ease;
+}
+
+.video-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 14px 36px rgba(173, 20, 87, 0.12);
+}
+
+.video-thumb-wrap {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 16/9;
+  background: #1a0f16;
+  overflow: hidden;
+  cursor: pointer;
+}
+
+.video-thumb-wrap img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transition: transform 0.3s ease;
+}
+
+.video-thumb-wrap:hover img {
+  transform: scale(1.04);
+}
+
+.video-play-badge {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  background: rgba(216, 27, 96, 0.9);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 24px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.3);
+  transition: transform 0.2s ease, background 0.2s ease;
+}
+
+.video-thumb-wrap:hover .video-play-badge {
+  transform: translate(-50%, -50%) scale(1.12);
+  background: #ad1457;
+}
+
+.video-duration {
+  position: absolute;
+  bottom: 8px;
+  right: 8px;
+  background: rgba(0,0,0,0.75);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: 4px;
+}
+
+.video-content {
+  padding: 16px 18px 20px;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+}
+
+.video-channel-tag {
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--clay);
+  margin-bottom: 6px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.video-title {
+  font-family: var(--serif);
+  font-size: 18px;
+  font-weight: 650;
+  line-height: 1.35;
+  color: var(--ink);
+  margin: 0 0 8px;
+}
+
+.video-desc {
+  font-size: 14px;
+  color: var(--muted);
+  line-height: 1.5;
+  margin: 0 0 14px;
+  flex: 1;
+}
+
+.video-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+
+
 

@@ -1,0 +1,6 @@
+{
+  "name": "Lisa's Recipe Book",
+  "description": "A Cajun and Texas cookbook with family recipes, notes, pictures, and MealDB open recipe library.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

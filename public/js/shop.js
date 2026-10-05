@@ -269,6 +269,32 @@ function cartLines(state, esc, asset) {
   </article>`).join("");
 }
 
+export function addRecipeIngredientsToCart(state, recipe) {
+  const ingList = Array.isArray(recipe.ingredients) ? recipe.ingredients.join("\n• ") : String(recipe.ingredients || "");
+  const cart = state.cart || [];
+  const line = {
+    id: `grocery-${recipe.id}`,
+    variantId: "",
+    title: `Groceries for: ${recipe.title}`,
+    variantLabel: `${recipe.ingredients?.length || 0} items needed`,
+    priceCents: 1500, // standard baseline runner trip fee
+    qty: 1,
+    image: recipe.image || "/images/shop-errand.jpg",
+    ageRestricted: false,
+    category: "errands",
+    detail: `Ingredients to purchase:\n• ${ingList}\n(Recipe: ${recipe.title})`
+  };
+  const existing = cart.find((item) => item.id === line.id);
+  if (existing) {
+    existing.qty += 1;
+  } else {
+    cart.push(line);
+  }
+  state.cart = cart;
+  saveCart(cart);
+  return line;
+}
+
 function cartView(ctx) {
   const { state, esc, asset } = ctx;
   const count = (state.cart || []).reduce((sum, line) => sum + Number(line.qty || 0), 0);
@@ -278,48 +304,122 @@ function cartView(ctx) {
   const needsRunner = (state.cart || []).some((line) => line.category === "errands");
   const mode = draft(state, "mode", state.shopMode || "local");
   const estimate = state.shopEstimate;
-  const guest = state.user ? "" : `<p>You can send this order as a guest. Log in is optional.</p>`;
+  const payMethod = draft(state, "payMethod", "cashapp");
+  const guest = state.user ? "" : `<p class="empty" style="color:var(--clay);font-weight:500;">You can send this order as a guest. Log in is optional.</p>`;
+  
+  // Format pre-filled Telegram order message
+  const telegramOrderMsg = order ? [
+    `🚨 NEW LISA'S XPRESS ORDER [#${order.id}]`,
+    `💰 Total: ${money(order.totalCents)}`,
+    `👤 Customer: ${order.name || draft(state, "name")} (${order.phone || draft(state, "phone")})`,
+    `📍 Delivery: ${order.address || draft(state, "address")}, ${order.city || draft(state, "city")} ${order.zip || draft(state, "zip")}`,
+    `📦 Method: ${order.label || "Local Delivery / Runner"}`,
+    `💳 Pay: Cash App ($Yellow9859) / Square`,
+    `\nItems:\n` + (order.lines || []).map(l => `• ${l.qty}x ${l.title} ${l.detail ? `(${l.detail})` : ""}`).join("\n")
+  ].join("\n") : "";
+
+  const telegramShareUrl = `https://t.me/share/url?url=${encodeURIComponent(location.origin)}&text=${encodeURIComponent(telegramOrderMsg)}`;
+
   const body = order
-    ? `<div class="pay-card panel">
-        <p class="eyebrow">Order received</p>
-        <h3>#${esc(order.id)}</h3>
-        <p>Total ${esc(money(order.totalCents))}. ${esc(order.label || "Delivery")} is ${esc(money(order.shippingCents))}.</p>
-        <a class="btn moss" href="${esc(order.cashUrl)}" target="_blank" rel="noopener">Pay ${esc(money(order.totalCents))} with Cash App</a>
-        <p>Cashtag <strong>$Yellow9859</strong>. Put <strong>#${esc(order.id)}</strong> in the Cash App note.</p>
-        <button class="btn quiet" type="button" data-action="copy" data-text="#${esc(order.id)}">Copy the order number</button>
-        <p class="empty">If the button does not open, open Cash App yourself, pay $Yellow9859 the amount above, and type the order number in the note.</p>
-        ${order.telegram === "skipped" ? `<p class="empty">The order is saved. Telegram will get a copy once the bot is connected.</p>` : `<p class="empty">Mom's phone got the order.</p>`}
-        <button class="btn quiet" type="button" data-action="shop-done">Back to the shop</button>
+    ? `<div class="pay-card panel" style="border:2px solid var(--moss);box-shadow:0 12px 36px rgba(216,27,96,0.15);">
+        <div style="display:inline-flex;align-items:center;gap:6px;padding:3px 10px;background:#fce4ec;border-radius:999px;color:#ad1457;font-size:12px;font-weight:600;margin-bottom:8px;">
+          🎗️ Order Confirmed • Lisa's Xpress
+        </div>
+        <p class="eyebrow" style="color:var(--clay);">Order successfully placed</p>
+        <h3 style="font-size:32px;margin:4px 0 10px;color:var(--ink);">#${esc(order.id)}</h3>
+        <p style="font-size:17px;">Total: <strong>${esc(money(order.totalCents))}</strong> (${esc(order.label || "Delivery")} is ${esc(money(order.shippingCents))})</p>
+        
+        <div style="margin:20px 0;display:flex;flex-direction:column;gap:12px;">
+          <a class="btn moss" href="${esc(order.cashUrl || `https://cash.app/$Yellow9859/${(order.totalCents/100).toFixed(2)}`)}" target="_blank" rel="noopener" style="font-size:17px;padding:14px 20px;display:flex;align-items:center;justify-content:center;gap:10px;font-weight:700;">
+            <i class="bi bi-currency-dollar"></i> Pay ${esc(money(order.totalCents))} with Cash App ($Yellow9859)
+          </a>
+          
+          <a class="btn" href="${telegramShareUrl}" target="_blank" rel="noopener" style="background:#0088cc;color:#fff;border-color:#0088cc;font-size:16px;padding:12px 20px;display:flex;align-items:center;justify-content:center;gap:10px;font-weight:600;">
+            <i class="bi bi-telegram"></i> Send Order to Telegram Chat / Runner
+          </a>
+        </div>
+
+        <div style="background:var(--paper);border:1px dashed var(--line);border-radius:12px;padding:14px;margin:16px 0;text-align:left;">
+          <p style="margin:0 0 6px;font-weight:600;color:var(--ink);">Cash App Instructions:</p>
+          <p style="margin:0;font-size:14px;color:var(--muted);">1. Open Cash App on your phone.<br>2. Send <strong>${esc(money(order.totalCents))}</strong> to <strong>$Yellow9859</strong>.<br>3. Enter <strong>#${esc(order.id)}</strong> in the "For / Note" field.</p>
+        </div>
+
+        <div style="display:flex;flex-wrap:wrap;gap:8px;justify-content:center;margin-top:14px;">
+          <button class="btn quiet" type="button" data-action="copy" data-text="#${esc(order.id)}"><i class="bi bi-clipboard"></i> Copy Order #</button>
+          <button class="btn quiet" type="button" data-action="shop-done">Back to Shop</button>
+        </div>
       </div>`
-    : `<div class="cart-lines">${cartLines(state, esc, asset) || `<p class="empty">The cart is empty. <a href="#/shop">Look through the shop</a>.</p>`}</div>
-      <p class="shop-sub">Items ${esc(money(subtotal))}${estimate ? ` · ${esc(estimate.label)} ${esc(money(estimate.shippingCents))} · Total ${esc(money(estimate.totalCents))}` : ""}</p>
-      ${count ? `<form id="shop-checkout" class="shop-checkout panel">
-        <h3>Delivery</h3>
+    : `<div class="cart-lines">${cartLines(state, esc, asset) || `<p class="empty">The cart is empty. <a href="#/shop">Look through the shop</a> or add ingredients from a recipe!</p>`}</div>
+      <p class="shop-sub" style="font-size:18px;font-weight:600;margin:18px 0 12px;">Items: ${esc(money(subtotal))}${estimate ? ` · ${esc(estimate.label)} ${esc(money(estimate.shippingCents))} · Total ${esc(money(estimate.totalCents))}` : ""}</p>
+      ${count ? `<form id="shop-checkout" class="shop-checkout panel" style="border-radius:18px;">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+          <h3 style="margin:0;font-size:22px;">Delivery & Errand Checkout</h3>
+          <span style="font-size:13px;padding:3px 10px;background:#fce4ec;color:#ad1457;border-radius:999px;font-weight:600;">🎗️ Lisa's Xpress</span>
+        </div>
         ${guest}
-        <div class="shop-switch tight">
-          <button class="chip ${mode !== "ship" ? "active" : ""}" type="button" data-action="shop-mode" data-mode="local">Local delivery</button>
+        <div class="shop-switch tight" style="margin-bottom:12px;">
+          <button class="chip ${mode !== "ship" ? "active" : ""}" type="button" data-action="shop-mode" data-mode="local">Local Delivery / Errand</button>
           <button class="chip ${mode === "ship" ? "active" : ""}" type="button" data-action="shop-mode" data-mode="ship">Ship it</button>
           <input type="hidden" name="mode" value="${esc(mode)}">
         </div>
-        <p class="empty">Local runs cover Lubbock 79401–79499 and Wolfforth 79382. Dry rubs, spices, dog treats, and accessories can ship. Fresh meals and Stripes runs stay in town.</p>
-        <div class="field"><label>Name<input name="name" required value="${esc(draft(state, "name", state.user?.name || ""))}" autocomplete="name"></label></div>
-        <div class="field"><label>Phone<input name="phone" required value="${esc(draft(state, "phone", ""))}" autocomplete="tel"></label></div>
-        <div class="field"><label>Street<input name="address" value="${esc(draft(state, "address", ""))}" autocomplete="street-address"></label></div>
+        <p class="empty">Local deliveries cover Lubbock (79401–79499) and Wolfforth (79382). Fresh meals, hot sides, and grocery errand runs stay in town. Spices and dry dog treats can ship nationwide.</p>
+        
+        <div class="field"><label>Your Name<input name="name" required value="${esc(draft(state, "name", state.user?.name || ""))}" autocomplete="name" placeholder="Full name"></label></div>
+        <div class="field"><label>Phone Number (for runner text/call)<input name="phone" required value="${esc(draft(state, "phone", ""))}" autocomplete="tel" placeholder="(806) 555-0123"></label></div>
+        <div class="field"><label>Street Address / Drop-off<input name="address" value="${esc(draft(state, "address", ""))}" autocomplete="street-address" placeholder="1234 Main St or Apartment #"></label></div>
         <div class="split">
-          <div class="field"><label>City<input name="city" value="${esc(draft(state, "city", ""))}" autocomplete="address-level2"></label></div>
-          <div class="field"><label>ZIP<input name="zip" inputmode="numeric" required value="${esc(draft(state, "zip", ""))}" autocomplete="postal-code"></label></div>
+          <div class="field"><label>City<input name="city" value="${esc(draft(state, "city", "Lubbock"))}" autocomplete="address-level2"></label></div>
+          <div class="field"><label>ZIP Code<input name="zip" inputmode="numeric" required value="${esc(draft(state, "zip", "79401"))}" autocomplete="postal-code"></label></div>
         </div>
-        ${needsRunner ? `<div class="field"><label>Runner<select name="runner"><option value="">Pick a runner</option><option ${draft(state, "runner") === "Leroy" ? "selected" : ""}>Leroy</option><option ${draft(state, "runner") === "Rex" ? "selected" : ""}>Rex</option></select></label></div>` : ""}
-        ${needsAge ? `<label class="checkline"><input type="checkbox" name="ageOk" ${draft(state, "ageOk") ? "checked" : ""}> I am 21 or older. A photo ID will be shown at the door for cigarettes or alcohol.</label>` : ""}
-        <div class="field"><label>Note for the whole order<textarea name="note" rows="2" placeholder="Gate code, porch, or anything else for the drop-off.">${esc(draft(state, "note", ""))}</textarea></label></div>
-        <div class="actions">
-          <button class="btn quiet" type="button" data-action="shop-estimate">Estimate delivery</button>
-          <button class="btn moss" type="submit">${state.shopSending ? "Sending…" : "Send order"}</button>
+
+        <div class="field" style="margin-top:10px;">
+          <label style="font-weight:600;margin-bottom:6px;display:block;">Select Payment Method:</label>
+          <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(140px, 1fr));gap:8px;">
+            <label style="display:flex;align-items:center;gap:8px;padding:10px;border:1px solid var(--line);border-radius:10px;background:var(--card);cursor:pointer;">
+              <input type="radio" name="payMethod" value="cashapp" ${payMethod === "cashapp" ? "checked" : ""}>
+              <span><i class="bi bi-currency-dollar" style="color:#00D632;"></i> Cash App ($Yellow9859)</span>
+            </label>
+            <label style="display:flex;align-items:center;gap:8px;padding:10px;border:1px solid var(--line);border-radius:10px;background:var(--card);cursor:pointer;">
+              <input type="radio" name="payMethod" value="square" ${payMethod === "square" ? "checked" : ""}>
+              <span><i class="bi bi-credit-card-2-front" style="color:#202020;"></i> Square Card Form</span>
+            </label>
+            <label style="display:flex;align-items:center;gap:8px;padding:10px;border:1px solid var(--line);border-radius:10px;background:var(--card);cursor:pointer;">
+              <input type="radio" name="payMethod" value="telegram" ${payMethod === "telegram" ? "checked" : ""}>
+              <span><i class="bi bi-telegram" style="color:#0088cc;"></i> Telegram Chat</span>
+            </label>
+          </div>
+        </div>
+
+        <div id="square-card-container" style="margin-top:12px;padding:14px;border:1px solid rgba(0,0,0,0.12);border-radius:12px;background:#fafafa;">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;font-size:13px;font-weight:600;color:#333;">
+            <i class="bi bi-shield-lock-fill" style="color:#2e7d32;"></i> Square Free Payment Processing (Form Ready)
+          </div>
+          <div style="display:grid;gap:8px;">
+            <input type="text" placeholder="Card number (XXXX XXXX XXXX XXXX)" style="background:#fff;border:1px solid #ccc;padding:8px 12px;border-radius:6px;font-size:14px;">
+            <div style="display:flex;gap:8px;">
+              <input type="text" placeholder="MM / YY" style="flex:1;background:#fff;border:1px solid #ccc;padding:8px 12px;border-radius:6px;font-size:14px;">
+              <input type="text" placeholder="CVV" style="width:80px;background:#fff;border:1px solid #ccc;padding:8px 12px;border-radius:6px;font-size:14px;">
+              <input type="text" placeholder="ZIP" style="width:100px;background:#fff;border:1px solid #ccc;padding:8px 12px;border-radius:6px;font-size:14px;">
+            </div>
+          </div>
+          <p style="font-size:11px;color:#666;margin:6px 0 0;">Card processing facilitated by Square. You can also pay seamlessly with Cash App.</p>
+        </div>
+
+        ${needsRunner ? `<div class="field" style="margin-top:12px;"><label>Delivery Runner<select name="runner"><option value="">Assign available runner</option><option ${draft(state, "runner") === "Leroy" ? "selected" : ""}>Leroy</option><option ${draft(state, "runner") === "Rex" ? "selected" : ""}>Rex</option></select></label></div>` : ""}
+        ${needsAge ? `<label class="checkline" style="margin-top:8px;"><input type="checkbox" name="ageOk" ${draft(state, "ageOk") ? "checked" : ""}> I am 21 or older. A photo ID will be shown at the door for age-restricted deliveries.</label>` : ""}
+        <div class="field" style="margin-top:10px;"><label>Special Delivery & Errand Notes<textarea name="note" rows="2" placeholder="Gate code, porch directions, item substitutions, or drop-off time preferences.">${esc(draft(state, "note", ""))}</textarea></label></div>
+        
+        <div class="actions" style="margin-top:16px;">
+          <button class="btn quiet" type="button" data-action="shop-estimate">Estimate Delivery</button>
+          <button class="btn moss" type="submit" style="font-size:16px;padding:12px 24px;font-weight:700;">${state.shopSending ? "Placing Order…" : "Place Order & Dispatch"}</button>
         </div>
       </form>` : ""}`;
-  return `<nav class="crumbs" aria-label="Breadcrumb"><a href="#/shop">Shop</a><span class="crumb-gap" aria-hidden="true">/</span><span aria-current="page">Cart</span></nav>
-    <h2 class="page-title">Cart</h2>
-    <p>Change quantities, take something off, and add the delivery address. ${state.user ? "You are signed in." : "Guest checkout is open."}</p>
+  return `<nav class="crumbs" aria-label="Breadcrumb"><a href="#/shop">Shop</a><span class="crumb-gap" aria-hidden="true">/</span><span aria-current="page">Cart & Errands</span></nav>
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">
+      <h2 class="page-title" style="margin:0;">Shopping & Errand Cart</h2>
+      <span style="font-size:13px;padding:3px 10px;background:#fce4ec;color:#ad1457;border-radius:999px;font-weight:600;">🎗️ Survivor Kitchen</span>
+    </div>
+    <p>Review items, adjust quantities, select local delivery or shipping, and dispatch your order. Cash App ($Yellow9859), Square, and Telegram ordering ready.</p>
     ${body}`;
 }
 

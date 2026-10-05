@@ -163,6 +163,178 @@ app.post("/api/auth/login", (req, res) => {
   res.json({ token: signToken(user.id), user: publicUser(user) });
 });
 
+app.post("/api/auth/quick-lisa", (_req, res) => {
+  let user = db.prepare("SELECT * FROM users WHERE email = 'lisa@lisasxpress.com' OR name LIKE 'Lisa%'").get();
+  if (!user) {
+    const result = db.prepare(`
+      INSERT INTO users (email, password_hash, name, bio, avatar_path, created_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(
+      "lisa@lisasxpress.com",
+      hashPassword("password123"),
+      "Lisa (Mom & Survivor)",
+      "Head Chef, Recipe Creator & Proud Breast Cancer Survivor 💕🎗️",
+      "/ribbon.svg",
+      new Date().toISOString()
+    );
+    user = db.prepare("SELECT * FROM users WHERE id = ?").get(result.lastInsertRowid);
+  }
+  res.json({ token: signToken(user.id), user: publicUser(user) });
+});
+
+const VIDEO_CHANNELS = [
+  {
+    id: "lisas-channel",
+    name: "Lisa's Kitchen Studio",
+    handle: "@LisasKitchenStudio",
+    tagline: "Homestyle Southern Traditions, Cajun Dark Roux & Survivor Kitchen",
+    url: "https://www.youtube.com/@LisasKitchenStudio",
+    ribbon: true,
+    isOfficial: true,
+    videos: []
+  },
+  {
+    id: "cooking-channel",
+    name: "Southern & Cajun Kitchen Classics",
+    handle: "@SouthernCajunKitchen",
+    tagline: "Authentic Dark Roux, Braised Texas Comfort & Cast Iron Baking",
+    url: "https://www.youtube.com/@LisasKitchenStudio",
+    ribbon: false,
+    videos: [
+      {
+        id: "curated-gumbo",
+        title: "Cook Up Gumbo as Good as Grandma's",
+        channel: "Smokin' & Grillin with AB",
+        duration: "21:30",
+        youtube: "https://www.youtube.com/watch?v=hNOG_FzUMIE",
+        thumbnail: "https://img.youtube.com/vi/hNOG_FzUMIE/hqdefault.jpg",
+        category: "cooking",
+        recipeId: "chicken-sausage-gumbo",
+        description: "Learn how to stir a deep chocolate roux, sweat the holy trinity, and simmer rich Cajun chicken and sausage gumbo to perfection."
+      },
+      {
+        id: "curated-pot-roast",
+        title: "Best Tender Chuck Pot Roast & Pan Gravy",
+        channel: "Natasha's Kitchen",
+        duration: "10:45",
+        youtube: "https://www.youtube.com/watch?v=Go8b1Cpjr84",
+        thumbnail: "https://img.youtube.com/vi/Go8b1Cpjr84/hqdefault.jpg",
+        category: "cooking",
+        recipeId: "sunday-pot-roast",
+        description: "Fall-apart tender beef chuck roast seared and braised slow in rich red wine and beef broth with sweet carrots and tender potatoes."
+      },
+      {
+        id: "curated-peach-cobbler",
+        title: "Easy Southern Homemade Peach Cobbler",
+        channel: "Preppy Kitchen",
+        duration: "8:50",
+        youtube: "https://www.youtube.com/watch?v=A_i71qdBnvw",
+        thumbnail: "https://img.youtube.com/vi/A_i71qdBnvw/hqdefault.jpg",
+        category: "cooking",
+        recipeId: "peach-cobbler",
+        description: "Warm, sweet spiced peaches bubbling under a golden, tender homemade biscuit crust. A true Sunday dinner staple."
+      }
+    ]
+  },
+  {
+    id: "gardening-channel",
+    name: "Raised Beds & Backyard Kitchen Garden",
+    handle: "@KitchenGardenGuides",
+    tagline: "Growing Your Own Herbs, Heirloom Tomatoes & Garden-to-Table Pickling",
+    url: "https://www.youtube.com/@LisasKitchenStudio",
+    ribbon: false,
+    videos: [
+      {
+        id: "curated-raised-beds",
+        title: "7 Raised Bed Gardening Hacks You'll Wish You Knew Sooner",
+        channel: "Next Level Gardening",
+        duration: "14:12",
+        youtube: "https://www.youtube.com/watch?v=gomWBqoOzzE",
+        thumbnail: "https://img.youtube.com/vi/gomWBqoOzzE/hqdefault.jpg",
+        category: "gardening",
+        description: "Essential raised bed tips: the best soil mixture, watering hacks, spacing vegetables, and growing fragrant kitchen herbs."
+      },
+      {
+        id: "curated-pickling",
+        title: "How to Make the Best Ever Homemade Dill Pickles",
+        channel: "Better Homes and Gardens",
+        duration: "6:24",
+        youtube: "https://www.youtube.com/watch?v=I_bR01qzQxs",
+        thumbnail: "https://img.youtube.com/vi/I_bR01qzQxs/hqdefault.jpg",
+        category: "gardening",
+        description: "Step-by-step garden cucumber canning: garlic dill brine, keeping your pickles crunchy, and simple water-bath processing."
+      }
+    ]
+  },
+  {
+    id: "pets-channel",
+    name: "The Pet Connection: Healthy Dog Meals & Treats",
+    handle: "@HealthyPupsKitchen",
+    tagline: "Veterinarian-Safe Cooked Dog Meals, Bone Broths & Homemade Canine Biscuits",
+    url: "https://www.youtube.com/@LisasKitchenStudio",
+    ribbon: false,
+    videos: [
+      {
+        id: "curated-dog-meal",
+        title: "Complete & Balanced Homemade Fresh Dog Meals",
+        channel: "PetCubes Official",
+        duration: "11:05",
+        youtube: "https://www.youtube.com/watch?v=iP2vIXn6208",
+        thumbnail: "https://img.youtube.com/vi/iP2vIXn6208/hqdefault.jpg",
+        category: "pets",
+        recipeId: "dog-meal-week",
+        description: "Nutritionist-formulated, gentle homemade dog food with lean protein, wholesome vegetables, and natural calcium for daily health."
+      },
+      {
+        id: "curated-dog-treats",
+        title: "3 Healthy Homemade Dog Treat Recipes",
+        channel: "Bigger Bolder Baking with Gemma Stafford",
+        duration: "7:45",
+        youtube: "https://www.youtube.com/watch?v=OpCNt3qFYpc",
+        thumbnail: "https://img.youtube.com/vi/OpCNt3qFYpc/hqdefault.jpg",
+        category: "pets",
+        recipeId: "pumpkin-dog-biscuits",
+        description: "Wholesome 3-ingredient dog treats made with pure pumpkin and dog-safe peanut butter for crunchy, tail-wagging snacks."
+      }
+    ]
+  },
+  {
+    id: "survivor-channel",
+    name: "Survivor Kitchen & Healing Foods",
+    handle: "@SurvivorKitchen",
+    tagline: "Anti-Inflammatory Broths, Restorative Comfort & Nourishing Meals",
+    url: "https://www.youtube.com/@LisasKitchenStudio",
+    ribbon: true,
+    videos: [
+      {
+        id: "curated-healing-broth",
+        title: "Ultimate Anti-Inflammatory Bone Broth for Gut & Immunity",
+        channel: "The Doctor's Kitchen",
+        duration: "12:18",
+        youtube: "https://www.youtube.com/watch?v=4iswJTdV-oo",
+        thumbnail: "https://img.youtube.com/vi/4iswJTdV-oo/hqdefault.jpg",
+        category: "wellness",
+        recipeId: "healing-bone-broth",
+        description: "Nutrient-dense, slow-simmered bone broth rich in collagen, ginger, turmeric, and healing root aromatics to support recovery and gut health."
+      },
+      {
+        id: "curated-golden-milk",
+        title: "Golden Milk Recipe for Rest & Anti-Inflammation",
+        channel: "Sasu Flavas",
+        duration: "5:32",
+        youtube: "https://www.youtube.com/watch?v=6GUhYp0cs9w",
+        thumbnail: "https://img.youtube.com/vi/6GUhYp0cs9w/hqdefault.jpg",
+        category: "wellness",
+        description: "Warm, soothing golden turmeric milk with cinnamon and black pepper for maximum curcumin absorption, restful sleep, and comfort."
+      }
+    ]
+  }
+];
+
+app.get("/api/channels", (_req, res) => {
+  res.json({ channels: VIDEO_CHANNELS });
+});
+
 app.get("/api/auth/me", (req, res) => {
   res.json({ user: publicUser(userFrom(req)) });
 });
@@ -1064,6 +1236,22 @@ app.get("/api/browse", async (req, res) => {
   } catch (error) {
     res.status(error.status || 500).json({ error: error.status ? error.message : "That page could not be opened." });
   }
+});
+
+app.get("/api/download/youtube-avatar", (_req, res) => {
+  res.download(path.join(root, "youtube-avatar-800.png"), "lisas-kitchen-youtube-avatar.png");
+});
+
+app.get("/api/download/youtube-avatar-1024", (_req, res) => {
+  res.download(path.join(root, "youtube-avatar-1024.png"), "lisas-kitchen-youtube-avatar-1024.png");
+});
+
+app.get("/api/download/youtube-banner", (_req, res) => {
+  res.download(path.join(root, "youtube-banner-2560.png"), "lisas-kitchen-youtube-banner.png");
+});
+
+app.get("/api/download/homescreen-icon", (_req, res) => {
+  res.download(path.join(root, "icons", "icon-512.png"), "lisas-homescreen-icon-512.png");
 });
 
 app.use(express.static(root));

@@ -1,5 +1,5 @@
 import { attachCallMedia, bindDesk, callLayer, clearCallSound, deskAction, deskNavigated, deskSubmit, deskTick, linkTools, messagesView, pageLink, paintDeskBadge, previewCallSound, ringerLabel, saveCallSound, searchView, warmRinger } from "./desk.js?v=26";
-import { loadCart, shopClick, shopSubmit, shopView } from "./shop.js?v=5";
+import { loadCart, shopClick, shopSubmit, shopView, addRecipeIngredientsToCart } from "./shop.js?v=6";
 
 const API = window.APP_CONFIG?.apiBase || "";
 const state = {
@@ -12,6 +12,14 @@ const state = {
   reader: null,
   toast: "",
   recording: null,
+  fontSize: localStorage.getItem("lisa-font-size") || "regular",
+  activeVideo: null,
+  videoChannels: [],
+  videoCategory: "all",
+  videoLoading: false,
+  recipeCache: {},
+  recipeFetching: {},
+  teleprompterRecipe: null,
   shelf: [],
   shelfCategories: [],
   shelfCategory: "Chicken",
@@ -85,6 +93,7 @@ const state = {
   shopSending: false
 };
 state.cart = loadCart();
+try { document.documentElement.setAttribute("data-font-size", state.fontSize); } catch {}
 const timer = { endAt: 0, pausedRemaining: 0, running: false, handle: null, alerted: false };
 let deferredInstall = null;
 let wakeLock = null;
@@ -345,25 +354,33 @@ function shell(main) {
   return `
     <header class="mast">
       <a class="brand" href="#/">
-        <img class="ribbon-mark" src="/ribbon.svg" alt="">
+        <img class="ribbon-mark" src="/ribbon.svg" alt="Pink Ribbon">
         <span>
-          <p class="eyebrow">Cajun, Texas, and the open library</p>
-          <h1>Lisa's Recipe Book</h1>
+          <p class="eyebrow"><span class="survivor-ribbon-tag">🎗️ Breast Cancer Survivor</span> Homestyle Cajun & Texas</p>
+          <h1>Lisa's Kitchen & Deliveries</h1>
         </span>
       </a>
-      <nav class="nav" aria-label="Desktop navigation">
-        <a class="${route().name === 'home' ? 'active' : ''}" href="#/"><i class="bi bi-collection-play"></i> Feed</a>
-        <a class="${route().name === 'shop' && route().id !== 'cart' ? 'active' : ''}" href="#/shop"><i class="bi bi-bag"></i> Shop</a>
-        <a class="basket-link ${route().name === 'shop' && route().id === 'cart' ? 'active' : ''}" href="#/shop/cart"><i class="bi bi-cart"></i> Cart${state.cart?.length ? ` (${state.cart.reduce((sum, line) => sum + Number(line.qty || 0), 0)})` : ""}</a>
-        <a class="${route().name === 'notes' ? 'active' : ''}" href="#/notes"><i class="bi bi-journal-text"></i> Notepad</a>
-        <a class="${route().name === 'library' ? 'active' : ''}" href="#/library"><i class="bi bi-book"></i> Library</a>
-        <a class="${route().name === 'messages' ? 'active' : ''}" href="#/messages"><i class="bi bi-chat-dots"></i> Messages</a>
-        <a class="btn" href="#/notes"><i class="bi bi-pencil-square"></i> New Post</a>
-      </nav>
+      <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;">
+        <div class="typography-switcher" aria-label="Font size switcher" title="Adjust text size for easier reading">
+          <span class="type-label"><i class="bi bi-type"></i> Size:</span>
+          <button type="button" class="type-btn ${state.fontSize === 'regular' ? 'active' : ''}" data-action="set-font-size" data-size="regular" title="Standard Text">A</button>
+          <button type="button" class="type-btn ${state.fontSize === 'large' ? 'active' : ''}" data-action="set-font-size" data-size="large" title="Large Text">A+</button>
+          <button type="button" class="type-btn ${state.fontSize === 'senior' ? 'active' : ''}" data-action="set-font-size" data-size="senior" title="Senior High-Legibility Reader">A++</button>
+        </div>
+        <nav class="nav" aria-label="Desktop navigation">
+          <a class="${route().name === 'home' || route().name === 'recipe' ? 'active' : ''}" href="#/"><i class="bi bi-book"></i> Recipes</a>
+          <a class="${route().name === 'studio' || route().name === 'videos' ? 'active' : ''}" href="#/studio"><i class="bi bi-camera-reels"></i> Videos & Studio</a>
+          <a class="${route().name === 'shop' && route().id !== 'cart' ? 'active' : ''}" href="#/shop"><i class="bi bi-bag"></i> Shop & Errands</a>
+          <a class="basket-link ${route().name === 'shop' && route().id === 'cart' ? 'active' : ''}" href="#/shop/cart"><i class="bi bi-cart"></i> Cart${state.cart?.length ? ` (${state.cart.reduce((sum, line) => sum + Number(line.qty || 0), 0)})` : ""}</a>
+          <a class="${route().name === 'notes' ? 'active' : ''}" href="#/notes"><i class="bi bi-journal-text"></i> Kitchen Notes</a>
+          <a class="${route().name === 'messages' ? 'active' : ''}" href="#/messages"><i class="bi bi-chat-dots"></i> Messages</a>
+        </nav>
+      </div>
     </header>
     <main class="wrap">${main}</main>
     ${appBar()}
     ${callLayer()}
+    ${state.activeVideo ? videoModal() : ""}
     ${state.activeModalPost ? lightboxModal() : ""}
     ${state.shareDialogPost ? shareDialog() : ""}
     ${state.zoomedImage ? imageZoomModal() : ""}
@@ -493,30 +510,118 @@ function soundView() {
 
 function privacyView() {
   return shell(`
-    <h2 class="page-title">Privacy</h2>
-    <p>Lisa's Recipe Book is a kitchen, a family board, and a small shop. Anyone can open it, and anyone can make a profile.</p>
-    <section class="panel legal">
-      <h3>How the book works</h3>
-      <p>The Book is the home page. It shows recipes, and notes from people who have a profile. The Library holds more plates. The Shop is for meals, desserts, dog treats, spices, and a Lubbock or Wolfforth errand. Messages, the Notepad, and the Studio open after you log in.</p>
-      <h3>Create a profile</h3>
-      <p>Open Menu, then Log in. In the box marked First time here, type your name, your email, and a password of at least 8 characters. Tap Create account. That profile is yours.</p>
-      <p>You do not need an invitation. If that email already has a profile, log in with it. From Profile you can add a short line about yourself and a portrait.</p>
-      <p>With a profile you can write a recipe, leave a note, comment, like, star, follow someone, send a message, and place a call.</p>
-      <h3>Without a profile</h3>
-      <p>A guest can read the recipes and use the shop. Sending an order does not require an account. Notes, comments, messages, calls, and the family list ask you to log in.</p>
-      <h3>What a profile keeps</h3>
-      <p>A profile holds a name, an email, and a password. The password is stored as a code, not as the words you type. A portrait and a short line about you are optional.</p>
-      <p>The book also keeps the recipes, notes, pictures, films, comments, likes, and stars you add, and who follows whom. Your login stays on this phone until you log out or clear the site data.</p>
-      <h3>The shop</h3>
-      <p>An order keeps the name, phone, street, city, and ZIP you type, plus the items and any special note. A copy of that order is sent through Telegram so the kitchen can fill it. The cart stays on this phone until you send the order or clear the site data.</p>
-      <p>Pay with Cash App. The book does not keep a card number. Cash App handles that payment under its own rules. The price on a custom errand is the runner's trip. The store price is separate.</p>
-      <h3>Who can see it</h3>
-      <p>People with a profile see the same recipes, notes, and films. A message is only for the two people in that conversation. A call rings the other phone until they answer, decline, or the ring ends. The book does not record the call. Active means that person has the book open.</p>
-      <h3>What we do not do</h3>
-      <p>We do not sell this information, and the book does not show ads. A portrait you paste from a link is loaded from that address. A YouTube film plays from YouTube, under YouTube's own rules.</p>
-      <h3>Where it lives</h3>
-      <p>The book is hosted on Cloudflare. Open Profile to change your name, your line about yourself, or your portrait. Log out on a shared phone. If you want a profile taken off the book, ask the person who set it up.</p>
-    </section>
+    <nav class="crumbs" aria-label="Breadcrumb"><a href="#/">Home</a><span class="crumb-gap" aria-hidden="true">/</span><span aria-current="page">Privacy & Trust</span></nav>
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">
+      <h2 class="page-title" style="margin:0;">Privacy & What to Expect</h2>
+      <span style="font-size:12px;padding:3px 10px;background:#fce4ec;color:#ad1457;border-radius:999px;font-weight:700;">🎗️ Lisa's Survivor Kitchen</span>
+    </div>
+    <p style="font-size:16px;line-height:1.6;color:var(--muted);max-width:720px;">
+      Lisa's Recipe Book & Errand Delivery Service is built on family trust, honest food, and community care. We want you to feel safe, respected, and in complete control of your experience.
+    </p>
+
+    <div style="display:grid;gap:20px;margin-top:20px;">
+      <!-- Section 1: What to Expect as a Visitor -->
+      <section class="panel" style="border-radius:20px;border-left:5px solid var(--moss);">
+        <h3 style="display:flex;align-items:center;gap:8px;font-size:20px;margin:0 0 10px;color:var(--ink);">
+          <i class="bi bi-eye-fill" style="color:var(--moss);"></i> 1. What to Expect When Browsing
+        </h3>
+        <p><strong>Open access for everyone:</strong> You never have to create an account or sign in just to read recipes, check ingredients, watch cooking videos, or look through the shop catalog.</p>
+        <ul style="margin:8px 0;padding-left:20px;line-height:1.6;">
+          <li><strong>No paywalls:</strong> All family Texas, Cajun, pet treats, and gardening recipes are free to read and print.</li>
+          <li><strong>No invasive tracking:</strong> We do not track you across the web, use advertising trackers, or sell your reading habits to data brokers.</li>
+          <li><strong>External video playback:</strong> YouTube videos (including Lisa's official channel) play using privacy-enhanced YouTube embeds under YouTube's standard terms.</li>
+        </ul>
+      </section>
+
+      <!-- Section 2: Profiles, Accounts & Cache Management -->
+      <section class="panel" style="border-radius:20px;border-left:5px solid #0088cc;">
+        <h3 style="display:flex;align-items:center;gap:8px;font-size:20px;margin:0 0 10px;color:var(--ink);">
+          <i class="bi bi-person-badge-fill" style="color:#0088cc;"></i> 2. Your Profile & Account Data
+        </h3>
+        <p>An account lets you post kitchen notes, save custom recipes, leave comments, follow family members, and access the video recording studio.</p>
+        <div style="background:var(--paper);border-radius:12px;padding:14px;margin:12px 0;">
+          <strong style="color:var(--ink);display:block;margin-bottom:4px;">🔐 How Your Credentials Are Protected:</strong>
+          <span style="font-size:14px;color:var(--muted);line-height:1.5;">
+            Passwords are cryptographically scrambled using irreversible salted <strong>bcrypt</strong> hashing. No one—not even the site administrators—can view your raw password.
+          </span>
+        </div>
+        <p><strong>What to do if you clear your browser cache:</strong></p>
+        <ul style="margin:8px 0;padding-left:20px;line-height:1.6;">
+          <li>Clearing browser cookies or site data simply signs this device out. Your saved recipes, notes, photos, and orders are <em>never</em> lost.</li>
+          <li><strong>1-Click Quick Sign-In:</strong> If you are Mom or using Lisa's profile, tap <em>"Quick Sign-In as Lisa"</em> on the login screen to immediately restore your session without retyping passwords.</li>
+          <li>To edit your name, bio, or photo, visit your <a href="#/profile">Profile</a> anytime. To permanently remove an account, contact the kitchen administrator.</li>
+        </ul>
+      </section>
+
+      <!-- Section 3: Shop Orders, Delivery & Payments -->
+      <section class="panel" style="border-radius:20px;border-left:5px solid #2e7d32;">
+        <h3 style="display:flex;align-items:center;gap:8px;font-size:20px;margin:0 0 10px;color:var(--ink);">
+          <i class="bi bi-cart-check-fill" style="color:#2e7d32;"></i> 3. Ordering, Errand Deliveries & Payments
+        </h3>
+        <p>When you place an order for fresh meals, desserts, pet treats, or a local Lubbock/Wolfforth errand run:</p>
+        <ul style="margin:8px 0;padding-left:20px;line-height:1.6;">
+          <li><strong>What we collect for fulfillment:</strong> Your name, phone number (for delivery runner texts/calls), drop-off street address, and any special gate/porch instructions.</li>
+          <li><strong>Telegram Runner Dispatch:</strong> A dispatch copy of your order is sent to our kitchen's private Telegram chat so runners can pack and deliver your order hot and fresh.</li>
+          <li><strong>We NEVER store credit cards:</strong>
+            <ul style="margin:4px 0 8px;padding-left:18px;">
+              <li><strong>Cash App:</strong> Payments are processed directly through Cash App to cashtag <strong>$Yellow9859</strong>. Cash App secures your banking information independently.</li>
+              <li><strong>Square Free Card Processing:</strong> Card payments are securely facilitated through Square's certified payment gateway.</li>
+              <li><strong>Cash on Delivery:</strong> You may also arrange cash payment upon delivery directly with the runner.</li>
+            </ul>
+          </li>
+        </ul>
+      </section>
+
+      <!-- Section 4: Camera, Audio & Recording Studio -->
+      <section class="panel" style="border-radius:20px;border-left:5px solid #d81b60;">
+        <h3 style="display:flex;align-items:center;gap:8px;font-size:20px;margin:0 0 10px;color:var(--ink);">
+          <i class="bi bi-camera-video-fill" style="color:#d81b60;"></i> 4. Camera, Microphone & Cooking Studio
+        </h3>
+        <p>Mom's Recording Studio includes a camera preview, audio checks, and teleprompter cue cards to film cooking tutorials:</p>
+        <ul style="margin:8px 0;padding-left:20px;line-height:1.6;">
+          <li><strong>Permission on demand:</strong> The app only accesses your camera and microphone when you explicitly click <em>"Open camera"</em> or <em>"Record"</em>.</li>
+          <li><strong>Local browser stream:</strong> Live video preview stays strictly inside your device's browser memory until you intentionally click <em>"Save film"</em>.</li>
+          <li><strong>Private family calls:</strong> Real-time desk video/audio calls are point-to-point and are never recorded or archived on our servers.</li>
+        </ul>
+      </section>
+
+      <!-- Section 5: What We Promise Never To Do -->
+      <section class="panel" style="border-radius:20px;background:#fff8fa;border:1px solid #f8bbd0;">
+        <h3 style="display:flex;align-items:center;gap:8px;font-size:20px;margin:0 0 10px;color:#880e4f;">
+          <i class="bi bi-shield-fill-check" style="color:#ad1457;"></i> 5. Our Promise to You
+        </h3>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(240px, 1fr));gap:14px;margin-top:10px;">
+          <div style="background:#fff;padding:12px 14px;border-radius:12px;border:1px solid rgba(216,27,96,0.15);">
+            <strong style="color:var(--ink);display:flex;align-items:center;gap:6px;">
+              <i class="bi bi-x-circle-fill" style="color:#c2185b;"></i> No Selling Your Data
+            </strong>
+            <p style="margin:4px 0 0;font-size:13px;color:var(--muted);">We never sell, rent, or trade your phone number, email, or address to anyone.</p>
+          </div>
+          <div style="background:#fff;padding:12px 14px;border-radius:12px;border:1px solid rgba(216,27,96,0.15);">
+            <strong style="color:var(--ink);display:flex;align-items:center;gap:6px;">
+              <i class="bi bi-x-circle-fill" style="color:#c2185b;"></i> No Pop-Up Advertisements
+            </strong>
+            <p style="margin:4px 0 0;font-size:13px;color:var(--muted);">This is a family cookbook and kitchen delivery app, not an ad farm.</p>
+          </div>
+          <div style="background:#fff;padding:12px 14px;border-radius:12px;border:1px solid rgba(216,27,96,0.15);">
+            <strong style="color:var(--ink);display:flex;align-items:center;gap:6px;">
+              <i class="bi bi-check-circle-fill" style="color:#2e7d32;"></i> Complete Control
+            </strong>
+            <p style="margin:4px 0 0;font-size:13px;color:var(--muted);">Edit or delete your comments, notes, and profile anytime you choose.</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- Section 6: Contact & Questions -->
+      <section class="panel" style="border-radius:20px;text-align:center;padding:24px;">
+        <h4 style="font-size:18px;margin:0 0 6px;color:var(--ink);">Have a Question or Need Help with an Order?</h4>
+        <p style="margin:0 0 16px;color:var(--muted);font-size:14px;">Reach out directly to Lisa's Kitchen or your assigned errand runner.</p>
+        <div style="display:flex;flex-wrap:wrap;justify-content:center;gap:10px;">
+          <a class="btn moss" href="#/shop"><i class="bi bi-bag"></i> Browse the Shop</a>
+          <a class="btn quiet" href="#/"><i class="bi bi-book"></i> Back to Recipes</a>
+        </div>
+      </section>
+    </div>
   `);
 }
 
@@ -1009,6 +1114,18 @@ function recipeView(recipe) {
         ${youtubeId(recipe.youtube) ? `<div class="watch"><iframe src="https://www.youtube-nocookie.com/embed/${esc(youtubeId(recipe.youtube))}?rel=0&playsinline=1" title="${esc(recipe.title)}" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; fullscreen" allowfullscreen></iframe></div>` : ""}
         ${reactBar(reactionTarget(recipe).type, reactionTarget(recipe).id, recipe.social)}
         ${commentsBlock(reactionTarget(recipe).type, reactionTarget(recipe).id, recipe.social)}
+        <div class="recipe-cart-card" style="margin:20px 0;padding:16px 20px;background:linear-gradient(135deg, #fff0f5, #ffe4ec);border:1.5px solid #f48fb1;border-radius:18px;display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:12px;box-shadow:0 6px 20px rgba(216,27,96,0.08);">
+          <div>
+            <strong style="color:#880e4f;font-size:16px;display:flex;align-items:center;gap:8px;">
+              <i class="bi bi-cart-check-fill" style="color:#d81b60;font-size:18px;"></i> Need these groceries for this recipe?
+            </strong>
+            <p style="margin:3px 0 0;font-size:14px;color:#6d4c5d;">One click adds this recipe's entire ingredient list to your shopping & errand cart.</p>
+          </div>
+          <button type="button" class="btn moss" data-action="add-recipe-groceries" data-id="${esc(recipe.id)}" style="font-weight:700;display:inline-flex;align-items:center;gap:8px;padding:10px 20px;font-size:15px;border-radius:12px;box-shadow:0 4px 12px rgba(216,27,96,0.22);">
+            <i class="bi bi-cart-plus-fill"></i> Add All Ingredients to Cart
+          </button>
+        </div>
+
         <h3>Ingredients</h3>
         <ul>${(recipe.ingredients || []).map((item) => `<li>${esc(item)}</li>`).join("")}</ul>
         <h3>Method</h3>
@@ -1670,6 +1787,14 @@ function commentsBlock(type, id, social) {
   return `<section class="comments-block"><h3>Comments</h3>${list}${commentForm(type, id)}</section>`;
 }
 
+function iconPhoto() {
+  return `<i class="bi bi-camera-fill" aria-hidden="true"></i>`;
+}
+
+function iconVideo() {
+  return `<i class="bi bi-camera-video-fill" aria-hidden="true"></i>`;
+}
+
 function commentForm(type, id) {
   if (!state.user) return `<p class="empty"><a href="#/account">Log in</a> to leave a comment.</p>`;
   const pick = state.commentPicks?.[`${type}:${id}`];
@@ -1822,38 +1947,331 @@ function when(iso) {
   return date.toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 }
 
+async function loadChannels() {
+  if (state.videoLoading || state.videoChannels?.length) return;
+  state.videoLoading = true;
+  try {
+    const res = await api("/api/channels");
+    if (res?.channels) {
+      state.videoChannels = res.channels;
+      render();
+    }
+  } catch (e) {
+    console.warn("Could not load channels", e);
+  } finally {
+    state.videoLoading = false;
+  }
+}
+
+async function fetchSingleRecipe(id) {
+  try {
+    const res = await api(`/api/recipes/${encodeURIComponent(id)}`);
+    if (res?.recipe) {
+      state.recipeCache = state.recipeCache || {};
+      state.recipeCache[id] = res.recipe;
+      const idx = state.recipes.findIndex((r) => r.id === id);
+      if (idx >= 0) state.recipes[idx] = res.recipe;
+      else state.recipes.push(res.recipe);
+      render();
+    }
+  } catch (e) {
+    console.warn("Could not fetch recipe", id, e);
+  } finally {
+    if (state.recipeFetching) delete state.recipeFetching[id];
+  }
+}
+
+function videoModal() {
+  const vid = state.activeVideo;
+  if (!vid) return "";
+  const ytId = youtubeId(vid.youtube || vid.url);
+  return `
+    <div class="scrim" data-action="close-video-modal" style="z-index:900;"></div>
+    <div class="video-modal-dialog" role="dialog" aria-modal="true" style="position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);width:min(94vw, 860px);max-height:92vh;overflow-y:auto;background:var(--card);border:2px solid var(--moss);border-radius:24px;padding:22px;z-index:910;box-shadow:0 24px 60px rgba(0,0,0,0.35);">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
+        <span style="font-size:12px;padding:4px 12px;background:#fce4ec;color:#ad1457;border-radius:999px;font-weight:700;display:inline-flex;align-items:center;gap:6px;">
+          <i class="bi bi-youtube"></i> ${esc(vid.channel || "Cooking Tutorial")}
+        </span>
+        <button class="btn quiet" type="button" data-action="close-video-modal" style="padding:6px 14px;"><i class="bi bi-x-lg"></i> Close</button>
+      </div>
+      <div style="position:relative;width:100%;aspect-ratio:16/9;background:#000;border-radius:16px;overflow:hidden;margin-bottom:16px;box-shadow:0 8px 24px rgba(0,0,0,0.2);">
+        ${ytId ? `<iframe style="position:absolute;top:0;left:0;width:100%;height:100%;border:0;" src="https://www.youtube.com/embed/${esc(ytId)}?enablejsapi=1&rel=0&playsinline=1" title="${esc(vid.title)}" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowfullscreen></iframe>` : `<video controls autoplay playsinline style="width:100%;height:100%;" src="${esc(asset(vid.url || vid.filePath))}"></video>`}
+      </div>
+      <h3 style="font-size:22px;margin:0 0 8px;font-family:var(--serif);color:var(--ink);">${esc(vid.title)}</h3>
+      <p style="color:var(--muted);font-size:15px;margin:0 0 16px;line-height:1.6;">${esc(vid.description || vid.notes || "")}</p>
+      <div style="padding-top:14px;border-top:1px solid var(--line);display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between;">
+        <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
+          ${vid.recipeId ? `<a class="btn moss" href="#/recipe/${esc(vid.recipeId)}" data-action="close-video-modal"><i class="bi bi-book"></i> Open Matching Recipe</a>` : ""}
+          ${vid.youtube || vid.url ? `<a class="btn quiet" href="${esc(vid.youtube || vid.url)}" target="_blank" rel="noopener" style="font-weight:600;"><i class="bi bi-box-arrow-up-right"></i> Open on YouTube</a>` : ""}
+        </div>
+        <button class="btn quiet" type="button" data-action="close-video-modal" style="font-size:13px;">Done</button>
+      </div>
+    </div>
+  `;
+}
+
 function studio() {
-  if (!state.user) return accountGate("Log in to save films and links.");
+  if (!state.videoChannels?.length && !state.videoLoading) {
+    loadChannels();
+  }
+  const allChannels = state.videoChannels || [];
+  let allVideos = [];
+  for (const ch of allChannels) {
+    if (ch.videos) {
+      for (const v of ch.videos) allVideos.push({ ...v, channelTagline: ch.tagline, channelUrl: ch.url });
+    }
+  }
+  const currentCat = state.videoCategory || "all";
+  const filteredVideos = currentCat === "all" ? allVideos : allVideos.filter(v => v.category === currentCat);
+
   const saved = state.library.filter((item) => item.kind !== "film" && keptLink(item.url));
   const films = state.library.filter((item) => item.kind === "film");
+  const teleRecipe = state.teleprompterRecipe ? state.recipes.find(r => r.id === state.teleprompterRecipe) : null;
+
   return shell(`
-    <h2 class="page-title">Studio</h2>
-    <p>Save a YouTube video, or a video file you host yourself. Record a film here, or upload one.</p>
-    <div class="split">
-      <form id="link-form" class="panel">
-        <h3>Save for later</h3>
-        <div class="field"><label>Title<input name="title" required></label></div>
-        <div class="field"><label>Link<input name="url" required placeholder="YouTube, or a video you host"></label></div>
-        <div class="field"><label>Why you saved it<textarea name="notes"></textarea></label></div>
-        <button class="btn" type="submit">Save link</button>
-      </form>
-      <form id="film-form" class="panel">
-        <h3>Your films</h3>
-        <div class="field"><label>Title<input name="title" required value="${esc(state.filmDraft.title)}"></label></div>
-        <div class="field"><label>YouTube description<textarea name="description" placeholder="What you would paste into YouTube">${esc(state.filmDraft.description)}</textarea></label></div>
-        <div class="field"><label>Video file<input name="file" type="file" accept="video/mp4,video/webm,video/quicktime"></label></div>
-        ${cameraStage()}
-        <div class="actions">
-          <button class="btn moss" type="submit">Save film</button>
+    <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;margin-bottom:12px;">
+      <div>
+        <div style="display:inline-flex;align-items:center;gap:6px;padding:3px 12px;background:#fce4ec;border:1px solid #f48fb1;border-radius:999px;color:#ad1457;font-size:12px;font-weight:700;margin-bottom:8px;">
+          🎗️ Breast Cancer Survivor Cooking Studio
         </div>
-      </form>
+        <h2 class="page-title" style="margin:0 0 4px;">Lisa's Video Studio & YouTube Hub</h2>
+        <p style="margin:0;color:var(--muted);font-size:15px;">Mom's dedicated cooking channel, video teleprompter studio, and curated guides for gardening, pet treats & wellness.</p>
+      </div>
+      <div style="display:flex;gap:10px;align-items:center;">
+        <a class="btn moss" href="https://www.youtube.com/@LisasKitchenStudio" target="_blank" rel="noopener" style="display:inline-flex;align-items:center;gap:8px;font-weight:700;">
+          <i class="bi bi-youtube"></i> Visit Lisa's YouTube Channel
+        </a>
+      </div>
     </div>
-    <h3>Saved videos</h3>
-    <div class="stack">
-      ${saved.map(libraryCard).join("") || `<p class="empty">Nothing saved yet.</p>`}
+
+    <!-- YouTube Featured Channel Hero Banner -->
+    <div class="panel" style="background:linear-gradient(135deg, #fff0f5 0%, #ffe4ec 100%);border:2px solid #f48fb1;border-radius:24px;padding:24px;margin-bottom:20px;box-shadow:0 10px 30px rgba(216,27,96,0.12);">
+      <div style="display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:18px;">
+        <div style="display:flex;align-items:center;gap:16px;">
+          <div style="width:68px;height:68px;border-radius:20px;background:linear-gradient(135deg, #d81b60, #ad1457);display:flex;align-items:center;justify-content:center;color:#fff;font-size:32px;box-shadow:0 8px 24px rgba(216,27,96,0.35);">
+            <i class="bi bi-youtube"></i>
+          </div>
+          <div>
+            <div style="display:flex;align-items:center;gap:8px;">
+              <h3 style="font-family:var(--serif);font-size:24px;margin:0;color:#880e4f;">Lisa's Kitchen Studio</h3>
+              <span style="font-size:11px;padding:2px 8px;background:#fce4ec;color:#ad1457;border-radius:999px;font-weight:700;">Official Channel</span>
+            </div>
+            <p style="margin:4px 0 0;font-size:14px;color:#6d4c5d;"><strong>@LisasKitchenStudio</strong> • Homestyle Southern Traditions, Cajun Dark Roux, and Survivor Kitchen</p>
+          </div>
+        </div>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;">
+          <a class="btn moss" href="https://www.youtube.com/@LisasKitchenStudio" target="_blank" rel="noopener" style="font-weight:700;display:inline-flex;align-items:center;gap:8px;">
+            <i class="bi bi-bell-fill"></i> Subscribe on YouTube
+          </a>
+          <button type="button" class="btn quiet" data-action="camera-open" style="font-weight:600;display:inline-flex;align-items:center;gap:6px;">
+            <i class="bi bi-camera-video"></i> Record a Video
+          </button>
+        </div>
+      </div>
     </div>
-    <h3>Family films</h3>
-    <div class="stack">${films.map(libraryCard).join("") || `<p class="empty">Your films will sit here.</p>`}</div>
+
+    <!-- YouTube Channel Profile Avatar Asset Kit -->
+    <div class="panel" style="background:#ffffff;border:2px solid #f48fb1;border-radius:24px;padding:24px;margin-bottom:28px;box-shadow:0 10px 30px rgba(216,27,96,0.1);">
+      <div style="display:flex;flex-wrap:wrap;align-items:center;gap:24px;">
+        <div style="text-align:center;flex:none;margin:0 auto;">
+          <img src="/youtube-avatar-800.png" alt="Lisa's Kitchen YouTube Avatar" style="width:160px;height:160px;border-radius:50%;box-shadow:0 8px 24px rgba(216,27,96,0.3);border:4px solid #ffd54f;display:block;margin:0 auto 10px;">
+          <span style="display:inline-block;font-size:12px;background:#fce4ec;color:#ad1457;padding:3px 10px;border-radius:999px;font-weight:700;">800 × 800 PNG</span>
+        </div>
+        <div style="flex:1;min-width:260px;">
+          <div style="display:inline-flex;align-items:center;gap:6px;font-size:12px;color:#ad1457;font-weight:700;margin-bottom:6px;">
+            <i class="bi bi-youtube"></i> Official Channel Profile Icon
+          </div>
+          <h3 style="margin:0 0 8px;font-family:var(--serif);font-size:22px;color:#880e4f;">YouTube Channel Avatar & Icon</h3>
+          <p style="margin:0 0 12px;font-size:14px;color:var(--muted);line-height:1.5;">
+            Designed specifically for YouTube's round avatar crop. Features Lisa's breast cancer survivor pink ribbon, golden chef's utensils, and warm kitchen branding.
+          </p>
+          <div style="background:#fff4f8;border:1px solid #f8bbd0;border-radius:12px;padding:12px 14px;margin-bottom:16px;font-size:13px;color:#4a2c3a;line-height:1.5;">
+            <strong>📱 On Phone:</strong> Touch & hold the image to the left, then tap <em>"Save to Photos"</em> or <em>"Download image"</em>.<br>
+            <strong>💻 On Computer:</strong> Right-click the image and select <em>"Save Image As..."</em>, or use the direct download buttons below:
+          </div>
+          <div style="display:flex;gap:10px;flex-wrap:wrap;">
+            <button type="button" class="btn moss" data-action="force-download-png" data-url="/api/download/youtube-avatar" data-filename="lisas-kitchen-youtube-avatar.png" style="font-weight:700;display:inline-flex;align-items:center;gap:8px;font-size:14px;padding:10px 18px;border-radius:12px;">
+              <i class="bi bi-download"></i> Download Avatar PNG (800×800)
+            </button>
+            <button type="button" class="btn quiet" data-action="force-download-png" data-url="/api/download/homescreen-icon" data-filename="lisas-kitchen-homescreen-512.png" style="font-weight:600;display:inline-flex;align-items:center;gap:6px;font-size:14px;padding:10px 16px;border-radius:12px;">
+              <i class="bi bi-phone"></i> Download App Icon (512×512)
+            </button>
+            <a class="btn quiet" href="/api/download/youtube-avatar" target="_blank" style="font-size:13px;padding:10px 14px;">Direct Link</a>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- YouTube Channel Cover Banner Asset Kit -->
+    <div class="panel" style="background:#ffffff;border:2px solid #f48fb1;border-radius:24px;padding:24px;margin-bottom:28px;box-shadow:0 10px 30px rgba(216,27,96,0.1);">
+      <div style="margin-bottom:16px;">
+        <div style="display:inline-flex;align-items:center;gap:6px;font-size:12px;color:#ad1457;font-weight:700;margin-bottom:6px;">
+          <i class="bi bi-image"></i> Official Channel Cover Art
+        </div>
+        <h3 style="margin:0 0 8px;font-family:var(--serif);font-size:22px;color:#880e4f;">YouTube Channel Banner & Cover Image</h3>
+        <p style="margin:0;font-size:14px;color:var(--muted);line-height:1.5;">
+          Custom-designed to YouTube's exact recommended <strong>2560 × 1440</strong> banner specifications with a safe text zone for mobile, tablet, desktop, and TV screens.
+        </p>
+      </div>
+
+      <!-- Banner Preview Container with 16:9 Aspect Ratio -->
+      <div style="border-radius:16px;overflow:hidden;box-shadow:0 8px 24px rgba(0,0,0,0.15);border:2px solid #ffd54f;margin-bottom:16px;background:#260b14;">
+        <img src="/youtube-banner-2560.png" alt="Lisa's Kitchen YouTube Cover Banner" style="width:100%;height:auto;display:block;">
+      </div>
+
+      <div style="display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:14px;">
+        <div style="font-size:13px;color:var(--muted);">
+          <span>📐 Dimensions: <strong>2560 × 1440 pixels</strong></span> • <span style="color:#ad1457;font-weight:700;">Safe zone centered</span>
+        </div>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;">
+          <button type="button" class="btn moss" data-action="force-download-png" data-url="/api/download/youtube-banner" data-filename="lisas-kitchen-youtube-banner.png" style="font-weight:700;display:inline-flex;align-items:center;gap:8px;font-size:14px;padding:10px 18px;border-radius:12px;">
+            <i class="bi bi-download"></i> Download Cover Banner PNG (2560×1440)
+          </button>
+          <a class="btn quiet" href="/api/download/youtube-banner" target="_blank" style="font-size:13px;padding:10px 14px;">Direct Link</a>
+        </div>
+      </div>
+    </div>
+
+    <!-- YouTube Channel Description & Bio Helper -->
+    <div class="panel" style="background:#fafafa;border:1px solid #e0e0e0;border-radius:20px;padding:22px;margin-bottom:28px;">
+      <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;margin-bottom:12px;">
+        <div>
+          <h4 style="margin:0;font-family:var(--serif);font-size:18px;color:#880e4f;display:flex;align-items:center;gap:8px;">
+            <i class="bi bi-file-text-fill" style="color:#d81b60;"></i> YouTube Channel "About" Description (Ready to Copy)
+          </h4>
+          <p style="margin:4px 0 0;font-size:13px;color:var(--muted);">Paste this directly into your YouTube Studio > Customization > Basic Info > Description.</p>
+        </div>
+        <button type="button" class="btn moss" data-action="copy-channel-desc" style="font-size:13px;padding:8px 16px;font-weight:700;display:inline-flex;align-items:center;gap:6px;">
+          <i class="bi bi-clipboard-check"></i> Copy Full Description
+        </button>
+      </div>
+      <div id="youtube-channel-desc-text" style="background:#fff;border:1px solid #ddd;border-radius:12px;padding:16px;font-size:14px;line-height:1.6;color:#333;white-space:pre-wrap;font-family:inherit;max-height:220px;overflow-y:auto;">Welcome to Lisa’s Kitchen Studio! 🎗️🍳
+
+I'm Lisa — Texas home cook, proud mama, and breast cancer survivor. Welcome to my kitchen for real scratch cooking, comforting family recipes, and healing food.
+
+✨ On this channel:
+• Southern & Cajun Classics: Sunday dark roux gumbo, Texas pot roast, skillet cobblers & cast iron comfort.
+• Garden & Pets: Raised bed gardening, fresh herbs, and wholesome homemade dog food & treats.
+• Survivor Wellness: Anti-inflammatory broths & comforting meals to nourish body & spirit.
+
+Pull up a chair and make yourself at home!
+
+❤️ Connect & Support:
+📖 Recipe Book App: https://ais-pre-75unafk6y3wgyyvj7ygfln-473048529424.us-east1.run.app
+☕ Cash App: $Yellow9859
+📬 Local Lubbock/Wolfforth Deliveries & Errands in app shop!
+
+Subscribe & tap the bell 🔔 to cook with me!
+
+#SurvivorKitchen #LisasKitchen #SouthernCooking #CajunCooking #BreastCancerSurvivor</div>
+    </div>
+
+    <!-- Curated Video Section Header -->
+    <div style="margin:32px 0 16px;">
+      <div style="display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--moss);font-weight:700;margin-bottom:4px;">
+        <i class="bi bi-collection-play-fill"></i> Verified Video Tutorials & Masterclasses
+      </div>
+      <h3 style="font-family:var(--serif);font-size:22px;margin:0 0 6px;color:var(--ink);">Curated Cooking Guides & Kitchen Inspirations</h3>
+      <p style="margin:0;font-size:14px;color:var(--muted);">Selected step-by-step videos for classic Southern dark roux, tender chuck pot roast, raised bed gardening, and healthy pet food.</p>
+    </div>
+
+    <!-- Video Category Channels Filter -->
+    <div style="display:flex;align-items:center;gap:8px;overflow-x:auto;padding-bottom:10px;margin-bottom:16px;">
+      ${[
+        ["all", "All Videos"],
+        ["cooking", "🍳 Southern & Cajun Classics"],
+        ["gardening", "🌱 Raised Beds & Gardening"],
+        ["pets", "🐾 Healthy Pet Snacks & Dog Food"],
+        ["wellness", "💕 Survivor Wellness & Broths"]
+      ].map(([cat, label]) => `
+        <button type="button" class="chip ${currentCat === cat ? "active" : ""}" data-action="filter-video-cat" data-cat="${cat}" style="font-size:14px;padding:8px 16px;white-space:nowrap;font-weight:600;">
+          ${label}
+        </button>
+      `).join("")}
+    </div>
+
+    <!-- Video Grid -->
+    <div class="video-grid">
+      ${filteredVideos.map(vid => `
+        <article class="video-card">
+          <div class="video-thumb-wrap" data-action="watch-video" data-id="${esc(vid.id)}">
+            <img src="${esc(vid.thumbnail || '/images/garden-to-table.jpg')}" alt="${esc(vid.title)}" loading="lazy" onerror="this.onerror=null;this.src='/images/garden-to-table.jpg';">
+            <div class="video-play-badge"><i class="bi bi-play-fill"></i></div>
+            ${vid.duration ? `<span class="video-duration">${esc(vid.duration)}</span>` : ""}
+          </div>
+          <div class="video-content">
+            <div class="video-channel-tag">
+              <i class="bi bi-play-circle-fill" style="color:var(--moss);"></i>
+              ${esc(vid.channel)}
+            </div>
+            <h4 class="video-title">${esc(vid.title)}</h4>
+            <p class="video-desc">${esc(vid.description)}</p>
+            <div class="video-actions">
+              <button type="button" class="btn moss" data-action="watch-video" data-id="${esc(vid.id)}" style="font-size:13px;padding:6px 14px;font-weight:700;">
+                <i class="bi bi-play-fill"></i> Watch Video
+              </button>
+              ${vid.recipeId ? `<a class="btn quiet" href="#/recipe/${esc(vid.recipeId)}" style="font-size:13px;padding:6px 12px;"><i class="bi bi-book"></i> Open Recipe</a>` : ""}
+            </div>
+          </div>
+        </article>
+      `).join("")}
+    </div>
+
+    <!-- Mom's Teleprompter & Recording Studio -->
+    <div style="margin-top:40px;padding-top:24px;border-top:2px dashed var(--line);">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
+        <div>
+          <h3 style="font-family:var(--serif);font-size:24px;margin:0 0 4px;color:var(--ink);">Mom's Kitchen Recording Studio</h3>
+          <p style="margin:0;font-size:14px;color:var(--muted);">Record a cooking video, read recipe steps on the teleprompter cue card, or link an external YouTube video.</p>
+        </div>
+      </div>
+
+      <div class="split">
+        <!-- Teleprompter Cue Card & Camera -->
+        <div class="panel" style="border-radius:18px;">
+          <h4 style="margin:0 0 12px;font-size:17px;display:flex;align-items:center;gap:8px;">
+            <i class="bi bi-camera-video-fill" style="color:var(--moss);"></i> Live Video Recorder & Teleprompter
+          </h4>
+          <div class="field" style="margin-bottom:12px;">
+            <label style="font-size:13px;font-weight:600;">Recipe to display on Teleprompter while filming:
+              <select data-action="pick-teleprompter-recipe" style="margin-top:4px;">
+                <option value="">No recipe selected (free film)</option>
+                ${state.recipes.map(r => `<option value="${esc(r.id)}" ${state.teleprompterRecipe === r.id ? "selected" : ""}>${esc(r.title)}</option>`).join("")}
+              </select>
+            </label>
+          </div>
+          ${teleRecipe ? `
+            <div style="background:#fff4f8;border:1px solid #f48fb1;border-radius:12px;padding:14px;margin-bottom:14px;max-height:220px;overflow-y:auto;">
+              <strong style="color:#ad1457;font-size:14px;">Teleprompter Cue Card: ${esc(teleRecipe.title)}</strong>
+              <p style="font-size:13px;margin:6px 0;color:#6d4c5d;"><strong>Ingredients:</strong> ${(teleRecipe.ingredients || []).slice(0, 6).join(", ")}...</p>
+              <ol style="font-size:13px;margin:0;padding-left:18px;color:#333;">
+                ${(teleRecipe.steps || []).map(s => `<li style="margin-bottom:4px;">${esc(s)}</li>`).join("")}
+              </ol>
+            </div>
+          ` : ""}
+          ${cameraStage()}
+        </div>
+
+        <!-- Link External YouTube Video -->
+        <form id="link-form" class="panel" style="border-radius:18px;">
+          <h4 style="margin:0 0 12px;font-size:17px;display:flex;align-items:center;gap:8px;">
+            <i class="bi bi-youtube" style="color:#ff0000;"></i> Link YouTube Video to Recipe
+          </h4>
+          <div class="field"><label>Video Title<input name="title" required placeholder="e.g. Grandma's Gumbo Tutorial"></label></div>
+          <div class="field"><label>YouTube Video Link<input name="url" required placeholder="https://youtube.com/watch?v=..."></label></div>
+          <div class="field"><label>Notes & Creator Tips<textarea name="notes" rows="3" placeholder="Tell viewers what to watch for or how to prep."></textarea></label></div>
+          <button class="btn moss" type="submit" style="font-weight:700;">Save YouTube Video</button>
+        </form>
+      </div>
+
+      <!-- Saved Community Videos & Personal Films -->
+      ${saved.length || films.length ? `
+        <h4 style="margin:28px 0 14px;font-size:20px;">My Saved Videos & Community Films</h4>
+        <div class="stack">
+          ${[...saved, ...films].map(libraryCard).join("")}
+        </div>
+      ` : ""}
+    </div>
   `);
 }
 
@@ -1937,7 +2355,23 @@ function accountGate(copy) {
 }
 
 function accountForms() {
-  return `<div class="split">
+  return `
+  <div class="panel quick-login-card" style="margin-bottom:24px;background:linear-gradient(135deg, #fff0f5, #ffe4ec);border:2px solid #f48fb1;border-radius:20px;padding:24px;text-align:center;box-shadow:0 10px 30px rgba(216,27,96,0.12);">
+    <div style="display:inline-flex;align-items:center;gap:8px;padding:4px 14px;background:#fce4ec;border:1px solid #f06292;border-radius:999px;color:#ad1457;font-size:12px;font-weight:700;margin-bottom:12px;">
+      🎗️ Breast Cancer Survivor Kitchen & Studio
+    </div>
+    <h3 style="font-family:var(--serif);font-size:26px;margin:2px 0 8px;color:#880e4f;">Lisa's 1-Click Profile Restore</h3>
+    <p style="color:#6d4c5d;font-size:15px;max-width:580px;margin:0 auto 18px;line-height:1.5;">
+      Cleared your cache or using a new browser? Tap below to immediately sign in as <strong>Lisa (Mom & Survivor)</strong> with full profile access, saved recipes, and studio controls!
+    </p>
+    <div style="display:flex;flex-wrap:wrap;justify-content:center;gap:12px;">
+      <button type="button" class="btn moss" data-action="quick-login-lisa" style="font-size:16px;padding:12px 28px;font-weight:700;border-radius:12px;display:inline-flex;align-items:center;gap:10px;box-shadow:0 6px 20px rgba(216,27,96,0.28);">
+        <i class="bi bi-box-arrow-in-right"></i> Quick Sign In as Lisa (Mom)
+      </button>
+    </div>
+  </div>
+
+  <div class="split">
     <form id="login-form" class="panel">
       <h3>Log in</h3>
       <p class="empty">Use the email and password for this book.</p>
@@ -1978,9 +2412,24 @@ function render() {
   const root = document.getElementById("app");
   let html = "";
   if (current.name === "recipe") {
-    const recipe = state.recipes.find((item) => item.id === current.id);
-    document.title = recipe ? `${recipe.title} · Lisa's Recipe Book` : "Lisa's Recipe Book";
-    html = recipe ? recipeView(recipe) : shell(`<p>That recipe is not in the book.</p>`);
+    let recipe = state.recipes.find((item) => item.id === current.id) || state.recipeCache?.[current.id];
+    if (recipe) {
+      document.title = `${recipe.title} · Lisa's Recipe Book`;
+      try {
+        html = recipeView(recipe);
+      } catch (err) {
+        console.error("Recipe render caught:", err);
+        html = shell(`<div class="panel" style="padding:28px;text-align:center;"><p class="empty">Could not display this recipe.</p><a class="btn" href="#/">Back to Recipes</a></div>`);
+      }
+    } else {
+      document.title = "Opening recipe · Lisa's Recipe Book";
+      html = shell(`<div class="panel" style="padding:48px 24px;text-align:center;"><p class="empty"><i class="bi bi-hourglass-split"></i> Loading recipe from Lisa's Book…</p></div>`);
+      if (!state.recipeFetching?.[current.id]) {
+        state.recipeFetching = state.recipeFetching || {};
+        state.recipeFetching[current.id] = true;
+        fetchSingleRecipe(current.id);
+      }
+    }
   } else if (current.name === "world") {
     const recipe = state.worldCache[current.id];
     document.title = recipe ? `${recipe.title} · Lisa's Recipe Book` : "Library · Lisa's Recipe Book";
@@ -2004,8 +2453,8 @@ function render() {
   } else if (current.name === "notes") {
     document.title = "Notepad · Lisa's Recipe Book";
     html = notesView();
-  } else if (current.name === "studio") {
-    document.title = "Studio · Lisa's Recipe Book";
+  } else if (current.name === "studio" || current.name === "videos") {
+    document.title = "Studio & YouTube Hub · Lisa's Recipe Book";
     html = studio();
   } else if (current.name === "people") {
     const shown = (state.people || []).find((item) => String(item.id) === String(current.id)) || state.profile;
@@ -2243,6 +2692,101 @@ document.addEventListener("click", async (event) => {
   }
   const action = button.dataset.action;
   try {
+    if (action === "quick-login-lisa") {
+      event.preventDefault();
+      try {
+        const result = await api("/api/auth/quick-lisa", { method: "POST" });
+        localStorage.setItem("lisa-token", result.token);
+        state.user = result.user;
+        await refreshPrivate();
+        say(`Welcome back, ${result.user.name}! 💕🎗️`);
+        go("#/");
+      } catch (err) {
+        say(err.message || "Could not log in as Lisa.");
+      }
+      return;
+    }
+    if (action === "add-recipe-groceries") {
+      event.preventDefault();
+      const recipeId = button.dataset.id;
+      const recipe = state.recipes.find(r => r.id === recipeId) || state.recipeCache?.[recipeId];
+      if (recipe) {
+        addRecipeIngredientsToCart(state, recipe);
+        say(`Added groceries for "${recipe.title}" to cart! 🛒`);
+        render();
+      }
+      return;
+    }
+    if (action === "set-font-size") {
+      event.preventDefault();
+      const size = button.dataset.size || "regular";
+      state.fontSize = size;
+      localStorage.setItem("lisa-font-size", size);
+      document.documentElement.setAttribute("data-font-size", size);
+      say(`Text size set to: ${size === 'senior' ? 'Senior High-Legibility' : size === 'large' ? 'Large' : 'Standard'}`);
+      render();
+      return;
+    }
+    if (action === "filter-video-cat") {
+      event.preventDefault();
+      state.videoCategory = button.dataset.cat || "all";
+      render();
+      return;
+    }
+    if (action === "watch-video") {
+      event.preventDefault();
+      const vidId = button.dataset.id;
+      let match = null;
+      for (const ch of (state.videoChannels || [])) {
+        match = (ch.videos || []).find(v => v.id === vidId);
+        if (match) break;
+      }
+      if (match) {
+        state.activeVideo = match;
+        render();
+      }
+      return;
+    }
+    if (action === "close-video-modal") {
+      event.preventDefault();
+      state.activeVideo = null;
+      render();
+      return;
+    }
+    if (action === "force-download-png") {
+      event.preventDefault();
+      const url = button.dataset.url;
+      const filename = button.dataset.filename || "image.png";
+      say("Downloading PNG image…");
+      try {
+        const response = await fetch(url);
+        const blob = await response.blob();
+        const blobUrl = URL.createObjectURL(blob);
+        const tempLink = document.createElement("a");
+        tempLink.href = blobUrl;
+        tempLink.download = filename;
+        document.body.appendChild(tempLink);
+        tempLink.click();
+        tempLink.remove();
+        setTimeout(() => URL.revokeObjectURL(blobUrl), 3000);
+        say(`Saved ${filename}! 📷`);
+      } catch (err) {
+        window.location.href = url;
+      }
+      return;
+    }
+    if (action === "copy-channel-desc") {
+      event.preventDefault();
+      const descEl = document.getElementById("youtube-channel-desc-text");
+      if (descEl) {
+        navigator.clipboard.writeText(descEl.textContent.trim()).then(() => {
+          say("Copied YouTube Channel Description to clipboard! 📋");
+        }).catch(() => {
+          say("Please select the description text and copy.");
+        });
+      }
+      return;
+    }
     if (action === "zoom-recipe-image") {
       event.preventDefault();
       event.stopPropagation();
@@ -3454,6 +3998,10 @@ async function bootApp() {
   } catch {}
 
   try {
+    loadChannels().catch(() => {});
+  } catch {}
+
+  try {
     await loadFeedNotes();
     render();
   } catch (err) {
@@ -3499,6 +4047,14 @@ async function bootApp() {
 bootApp().catch((err) => {
   console.error("bootApp caught:", err);
   render();
+});
+
+document.addEventListener("change", (e) => {
+  const sel = e.target.closest("[data-action='pick-teleprompter-recipe']");
+  if (sel) {
+    state.teleprompterRecipe = sel.value || null;
+    render();
+  }
 });
 
 document.addEventListener("keydown", (e) => {

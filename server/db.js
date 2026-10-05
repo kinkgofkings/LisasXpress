@@ -144,6 +144,23 @@ export function seedIfEmpty() {
     `).run(3, "james@recipebook.family", pwHash, "James Coffman", "Keeping the family recipes, notes, and pictures in this book.", "", now);
   }
 
+  // Ensure Lisa's Mom & Survivor account is always seeded
+  const lisaUser = db.prepare("SELECT id FROM users WHERE email = 'lisa@lisasxpress.com' OR name LIKE 'Lisa%'").get();
+  if (!lisaUser) {
+    const lisaPw = hashPassword("password123");
+    db.prepare(`
+      INSERT INTO users (email, password_hash, name, bio, avatar_path, created_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(
+      "lisa@lisasxpress.com",
+      lisaPw,
+      "Lisa (Mom & Survivor)",
+      "Head Chef, Recipe Creator & Proud Breast Cancer Survivor 💕🎗️",
+      "/ribbon.svg",
+      now
+    );
+  }
+
   // Seed social notes/posts if empty
   const noteCount = db.prepare("SELECT COUNT(*) AS count FROM notes").get().count;
   if (!noteCount) {
