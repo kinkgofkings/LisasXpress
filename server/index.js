@@ -14,6 +14,11 @@ import {
   placeCall, readThread, searchBook, sendMessage, setCall, sqliteDesk
 } from "./desk.js";
 import { listProducts, placeOrder, quoteShipping, removeProduct, saveProduct, sqliteShop } from "./shop.js";
+import {
+  buildPublicConfig, createHousehold, ensureTenancy, findInvite, householdForUser,
+  isAdmin, loadHousehold, presentHousehold, saveHouseholdSettings, sameFamily
+} from "./tenancy.js";
+import { applyBrandToChannels, detectRegion, quickSignInAllowed, resolveBrand } from "../shared/white-label.js";
 
 const deskDb = sqliteDesk(db);
 await ensureDesk(deskDb);
@@ -46,6 +51,7 @@ const root = path.resolve("public");
 const uploadDir = path.join(root, "uploads");
 fs.mkdirSync(uploadDir, { recursive: true });
 seedIfEmpty();
+await ensureTenancy(shopDb, process.env);
 
 function allowOrigin(origin) {
   return true;
@@ -71,6 +77,20 @@ function requireUser(req, res) {
     return null;
   }
   return user;
+}
+
+async function familyFrom(req, body = {}) {
+  const user = userFrom(req);
+  const household = await householdForUser(shopDb, user);
+  const region = detectRegion({
+    env: process.env,
+    household,
+    lat: body.lat ?? req.query.lat,
+    lng: body.lng ?? req.query.lng,
+    zip: body.zip || req.query.zip,
+    requested: body.region || req.query.region
+  });
+  return { user, household, region };
 }
 
 const storage = multer.diskStorage({
@@ -130,11 +150,43 @@ function cuisineOf(value) {
   return "texas";
 }
 
-app.get("/api/health", (_req, res) => {
-  res.json({ ok: true, name: "Lisa's Recipe Book" });
+app.get("/api/health", async (_req, res) => {
+  const household = await loadHousehold(shopDb, "home");
+  res.json({ ok: true, name: resolveBrand(process.env, household).name });
 });
 
-app.post("/api/auth/register", (req, res) => {
+app.get("/api/config", async (req, res) => {
+  const ctx = await familyFrom(req);
+  res.json(buildPublicConfig(process.env, ctx.household, ctx.region, ctx.user));
+});
+
+app.get("/api/locale", async (req, res) => {
+  const ctx = await familyFrom(req, req.query);
+  res.json({ locale: buildPublicConfig(process.env, ctx.household, ctx.region, ctx.user).locale });
+});
+
+app.post("/api/locale", async (req, res) => {
+  const ctx = await familyFrom(req, req.body || {});
+  res.json({ locale: buildPublicConfig(process.env, ctx.household, ctx.region, ctx.user).locale });
+});
+
+app.get("/api/household", async (req, res) => {
+  const user = requireUser(req, res);
+  if (!user) return;
+  if (!isAdmin(user)) return res.status(403).json({ error: "Only a family admin can open these settings." });
+  res.json({ household: await presentHousehold(shopDb, process.env, user.household_id || "home", true) });
+});
+
+app.patch("/api/household", async (req, res) => {
+  const user = requireUser(req, res);
+  if (!user) return;
+  if (!isAdmin(user)) return res.status(403).json({ error: "Only a family admin can change these settings." });
+  const result = await saveHouseholdSettings(shopDb, process.env, user.household_id || "home", req.body || {});
+  if (result.error) return res.status(result.status || 400).json({ error: result.error });
+  res.json(result);
+});
+
+app.post("/api/auth/register", async (req, res) => {
   const name = String(req.body.name || "").trim();
   const email = String(req.body.email || "").trim().toLowerCase();
   const password = String(req.body.password || "");
@@ -142,10 +194,17 @@ app.post("/api/auth/register", (req, res) => {
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({ error: "That email does not look right." });
   if (password.length < 8) return res.status(400).json({ error: "Use a password of at least 8 characters." });
   try {
+    const invite = await findInvite(shopDb, req.body.invite);
+    if (String(req.body.invite || "").trim() && !invite) return res.status(404).json({ error: "That family invite code was not found." });
     const result = db.prepare(`
-      INSERT INTO users (email, password_hash, name, bio, avatar_path, created_at)
-      VALUES (?, ?, ?, '', '', ?)
+      INSERT INTO users (email, password_hash, name, bio, avatar_path, created_at, household_id, role)
+      VALUES (?, ?, ?, '', '', ?, 'home', 'member')
     `).run(email, hashPassword(password), name, new Date().toISOString());
+    if (invite) {
+      db.prepare("UPDATE users SET household_id = ?, role = 'member' WHERE id = ?").run(invite.id, result.lastInsertRowid);
+    } else {
+      await createHousehold(shopDb, { name: `${name}'s kitchen`, ownerId: result.lastInsertRowid });
+    }
     const user = db.prepare("SELECT * FROM users WHERE id = ?").get(result.lastInsertRowid);
     res.status(201).json({ token: signToken(user.id), user: publicUser(user) });
   } catch {
@@ -163,22 +222,12 @@ app.post("/api/auth/login", (req, res) => {
   res.json({ token: signToken(user.id), user: publicUser(user) });
 });
 
-app.post("/api/auth/quick-lisa", (_req, res) => {
-  let user = db.prepare("SELECT * FROM users WHERE email = 'lisa@lisasxpress.com' OR name LIKE 'Lisa%'").get();
-  if (!user) {
-    const result = db.prepare(`
-      INSERT INTO users (email, password_hash, name, bio, avatar_path, created_at)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `).run(
-      "lisa@lisasxpress.com",
-      hashPassword("password123"),
-      "Lisa (Mom & Survivor)",
-      "Head Chef, Recipe Creator & Proud Breast Cancer Survivor 💕🎗️",
-      "/ribbon.svg",
-      new Date().toISOString()
-    );
-    user = db.prepare("SELECT * FROM users WHERE id = ?").get(result.lastInsertRowid);
-  }
+app.post("/api/auth/quick-lisa", async (_req, res) => {
+  const household = await loadHousehold(shopDb, "home");
+  if (!quickSignInAllowed(process.env, household)) return res.status(404).json({ error: "Quick sign-in is turned off." });
+  const brand = resolveBrand(process.env, household);
+  const user = db.prepare("SELECT * FROM users WHERE email = ?").get(brand.ownerEmail);
+  if (!user || (user.household_id || "home") !== "home") return res.status(404).json({ error: "That quick sign-in is not set up." });
   res.json({ token: signToken(user.id), user: publicUser(user) });
 });
 
@@ -345,8 +394,9 @@ const VIDEO_CHANNELS = [
   }
 ];
 
-app.get("/api/channels", (_req, res) => {
-  res.json({ channels: VIDEO_CHANNELS });
+app.get("/api/channels", async (_req, res) => {
+  const household = await loadHousehold(shopDb, "home");
+  res.json({ channels: applyBrandToChannels(VIDEO_CHANNELS, resolveBrand(process.env, household)) });
 });
 
 app.get("/api/channels/sync", async (_req, res) => {
@@ -680,8 +730,9 @@ app.get("/api/notes", (req, res) => {
            u.id AS author_id, u.name AS author_name, u.avatar_path AS author_avatar
     FROM notes n
     LEFT JOIN users u ON u.id = n.user_id
+    WHERE COALESCE(n.household_id, 'home') = ?
     ORDER BY n.updated_at DESC
-  `).all();
+  `).all(user?.household_id || "home");
   const rows = notes.map((row) => ({
     ...publicNote(row),
     author: {
@@ -700,8 +751,8 @@ app.get("/api/notes/:id", (req, res) => {
            u.id AS author_id, u.name AS author_name, u.avatar_path AS author_avatar
     FROM notes n
     LEFT JOIN users u ON u.id = n.user_id
-    WHERE n.id = ?
-  `).get(req.params.id);
+    WHERE n.id = ? AND COALESCE(n.household_id, 'home') = ?
+  `).get(req.params.id, user?.household_id || "home");
   if (!row) return res.status(404).json({ error: "That note is not in the book." });
   const note = {
     ...publicNote(row),
@@ -737,7 +788,7 @@ app.post("/api/notes", (req, res) => {
     const line = text.trim().split(/\n/)[0].slice(0, 80);
     const title = String(req.body.title || line || (attachments[0]?.kind === "video" ? "Video" : attachments[0]?.kind === "file" ? "File" : "Photo")).slice(0, 120);
     const now = new Date().toISOString();
-    const result = db.prepare("INSERT INTO notes (user_id, title, body, attachments, updated_at) VALUES (?, ?, ?, ?, ?)").run(user.id, title, text, JSON.stringify(attachments), now);
+    const result = db.prepare("INSERT INTO notes (user_id, title, body, attachments, updated_at, household_id) VALUES (?, ?, ?, ?, ?, ?)").run(user.id, title, text, JSON.stringify(attachments), now, user.household_id || "home");
     const createdNote = {
       id: Number(result.lastInsertRowid),
       title,
@@ -762,7 +813,7 @@ app.post("/api/notes", (req, res) => {
     const line = text.trim().split(/\n/)[0].slice(0, 80);
     const title = String(req.body.title || line || (attachments[0]?.kind === "video" ? "Video" : attachments[0]?.kind === "file" ? "File" : "Photo")).slice(0, 120);
     const now = new Date().toISOString();
-    const result = db.prepare("INSERT INTO notes (user_id, title, body, attachments, updated_at) VALUES (?, ?, ?, ?, ?)").run(user.id, title, text, JSON.stringify(attachments), now);
+    const result = db.prepare("INSERT INTO notes (user_id, title, body, attachments, updated_at, household_id) VALUES (?, ?, ?, ?, ?, ?)").run(user.id, title, text, JSON.stringify(attachments), now, user.household_id || "home");
     res.status(201).json({
       note: {
         id: Number(result.lastInsertRowid),
@@ -1003,34 +1054,41 @@ app.delete("/api/library/:id", (req, res) => {
 
 app.get("/api/shop/products", async (req, res) => {
   try {
-    res.json(await listProducts(shopDb, req.query.category || "all"));
+    const ctx = await familyFrom(req);
+    res.json(await listProducts(shopDb, req.query.category || "all", ctx.region.id, ctx.household?.id || "home"));
   } catch (error) {
     res.status(500).json({ error: "The shop hit a snag. Please try again." });
   }
 });
 
 app.post("/api/shop/products", async (req, res) => {
-  if (!requireUser(req, res)) return;
+  const user = requireUser(req, res);
+  if (!user) return;
+  if (!isAdmin(user)) return res.status(403).json({ error: "Only a family admin can change the shop." });
   try {
-    shopReply(res, await saveProduct(shopDb, req.body || {}));
+    shopReply(res, await saveProduct(shopDb, req.body || {}, null, user.household_id || "home"));
   } catch {
     res.status(500).json({ error: "The shop hit a snag. Please try again." });
   }
 });
 
 app.patch("/api/shop/products/:id", async (req, res) => {
-  if (!requireUser(req, res)) return;
+  const user = requireUser(req, res);
+  if (!user) return;
+  if (!isAdmin(user)) return res.status(403).json({ error: "Only a family admin can change the shop." });
   try {
-    shopReply(res, await saveProduct(shopDb, req.body || {}, req.params.id));
+    shopReply(res, await saveProduct(shopDb, req.body || {}, req.params.id, user.household_id || "home"));
   } catch {
     res.status(500).json({ error: "The shop hit a snag. Please try again." });
   }
 });
 
 app.delete("/api/shop/products/:id", async (req, res) => {
-  if (!requireUser(req, res)) return;
+  const user = requireUser(req, res);
+  if (!user) return;
+  if (!isAdmin(user)) return res.status(403).json({ error: "Only a family admin can change the shop." });
   try {
-    res.json(await removeProduct(shopDb, req.params.id));
+    shopReply(res, await removeProduct(shopDb, req.params.id, user.household_id || "home"));
   } catch {
     res.status(500).json({ error: "The shop hit a snag. Please try again." });
   }
@@ -1038,7 +1096,8 @@ app.delete("/api/shop/products/:id", async (req, res) => {
 
 app.post("/api/shop/shipping-estimate", async (req, res) => {
   try {
-    shopReply(res, await quoteShipping(shopDb, req.body || {}));
+    const ctx = await familyFrom(req, req.body || {});
+    shopReply(res, await quoteShipping(shopDb, req.body || {}, ctx.region));
   } catch {
     res.status(500).json({ error: "The shop hit a snag. Please try again." });
   }
@@ -1046,7 +1105,13 @@ app.post("/api/shop/shipping-estimate", async (req, res) => {
 
 app.post("/api/shop/checkout", async (req, res) => {
   try {
-    shopReply(res, await placeOrder(shopDb, req.body || {}, process.env));
+    const ctx = await familyFrom(req, req.body || {});
+    shopReply(res, await placeOrder(shopDb, req.body || {}, process.env, {
+      household: ctx.household,
+      region: ctx.region,
+      householdId: ctx.household?.id || "home",
+      brand: resolveBrand(process.env, ctx.household)
+    }));
   } catch {
     res.status(500).json({ error: "The shop hit a snag. Please try again." });
   }
@@ -1231,15 +1296,15 @@ function personCard(user, row) {
 app.get("/api/people", (req, res) => {
   const user = requireUser(req, res);
   if (!user) return;
-  const people = db.prepare("SELECT id, name, bio, avatar_path FROM users ORDER BY name COLLATE NOCASE").all();
+  const people = db.prepare("SELECT id, name, bio, avatar_path FROM users WHERE COALESCE(household_id, 'home') = ? ORDER BY name COLLATE NOCASE").all(user.household_id || "home");
   res.json({ people: people.map((row) => personCard(user, row)) });
 });
 
 app.get("/api/people/:id", (req, res) => {
   const user = requireUser(req, res);
   if (!user) return;
-  const row = db.prepare("SELECT id, name, bio, avatar_path FROM users WHERE id = ?").get(req.params.id);
-  if (!row) return res.status(404).json({ error: "That person is not in the book." });
+  const row = db.prepare("SELECT id, name, bio, avatar_path, household_id FROM users WHERE id = ?").get(req.params.id);
+  if (!row || !sameFamily(user, row)) return res.status(404).json({ error: "That person is not in the book." });
   res.json({ person: personCard(user, row) });
 });
 
@@ -1247,8 +1312,8 @@ app.post("/api/people/:id/follow", (req, res) => {
   const user = requireUser(req, res);
   if (!user) return;
   if (String(user.id) === String(req.params.id)) return res.status(400).json({ error: "That is your own account." });
-  const other = db.prepare("SELECT id FROM users WHERE id = ?").get(req.params.id);
-  if (!other) return res.status(404).json({ error: "That person is not in the book." });
+  const other = db.prepare("SELECT id, household_id FROM users WHERE id = ?").get(req.params.id);
+  if (!other || !sameFamily(user, other)) return res.status(404).json({ error: "That person is not in the book." });
   const existing = db.prepare("SELECT 1 AS found FROM follows WHERE follower_id = ? AND following_id = ?").get(user.id, req.params.id);
   if (existing) {
     db.prepare("DELETE FROM follows WHERE follower_id = ? AND following_id = ?").run(user.id, req.params.id);

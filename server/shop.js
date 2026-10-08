@@ -1,4 +1,7 @@
-export const CASH_TAG = "Yellow9859";
+import {
+  cashLink as cashPayLink, checkoutPlan, chargeSquare, fillCopy, regionById, regionProducts,
+  resolveBrand, resolvePayments, squareAccessToken, zoneForZip
+} from "../shared/white-label.js";
 
 export const SHOP_CATEGORIES = [
   ["all", "All"],
@@ -96,7 +99,7 @@ const SEED = [
   item("rib-glaze-mix", "Mom's Secret Sweet & Spicy Rib Glaze Mix", "A dry mix you stir into the glaze at home. Sweet, warm, and meant for ribs.", "spices", 1100, 900, "PRICE DROP", "/images/shop-rib-glaze.jpg", 0, 8, 0, 0, [
     variant("jar", "One jar", 900, 8)
   ], 15),
-  item("kitchen-apron", "Embroidered Lisa's Kitchen Canvas Apron", "A heavyweight canvas apron with Lisa's Kitchen stitched on the bib. A gift from the same book as the recipes.", "accessories", 3800, null, "NEW BATCH", "/images/shop-apron.jpg", 1, 18, 0, 0, [], 16),
+  item("kitchen-apron", "Embroidered {{shortName}} Canvas Apron", "A heavyweight canvas apron with {{studioName}} stitched on the bib. A gift from the same book as the recipes.", "accessories", 3800, null, "NEW BATCH", "/images/shop-apron.jpg", 1, 18, 0, 0, [], 16),
   item("mesquite-board", "Handcrafted Solid Mesquite Cutting Board", "A solid mesquite board for the Texas table. Oil it, and let it live by the stove.", "accessories", 6400, null, "", "/images/shop-mesquite-board.jpg", 0, 48, 0, 0, [], 17),
   item("seasoning-kit", "Cast-Iron Seasoning Care Kit & Scrub", "Oil and a scrub so the skillet stays black and smooth. A small kit that ships anywhere.", "accessories", 2200, null, "", "/images/shop-cast-iron-kit.jpg", 0, 16, 0, 0, [], 18),
   item("laredo-taco-pack", "Laredo Taco Co. Fresh MTO 3-Taco Breakfast Pack", "A made-to-order Stripes run for Lubbock or Wolfforth. Three breakfast tacos and the salsa trio, picked up fresh.", "errands", 1499, null, "HOT BUY", "/images/shop-breakfast-tacos.jpg", 1, 18, 1, 0, [
@@ -183,27 +186,24 @@ export function money(cents) {
   return `$${(n / 100).toFixed(2)}`;
 }
 
-export function cashLink(totalCents) {
-  return `https://cash.app/$${CASH_TAG}/${(Math.max(0, Math.round(totalCents)) / 100).toFixed(2)}`;
+export function cashLink(totalCents, cashtag) {
+  const tag = cashtag || resolvePayments().providers.find((provider) => provider.id === "cashapp")?.cashtag;
+  return cashPayLink(tag, totalCents);
 }
 
-export function localCity(zip) {
-  const n = Number(String(zip || "").replace(/\D/g, "").slice(0, 5));
-  if (!n) return "";
-  if (n === 79382) return "Wolfforth";
-  if (n >= 79401 && n <= 79499) return "Lubbock";
-  return "";
+export function localCity(zip, region = regionById("tx")) {
+  return zoneForZip(region, zip)?.city || "";
 }
 
-export function estimateFee({ zip, weightOz, mode, localOnly }) {
+export function estimateFee({ zip, weightOz, mode, localOnly, region }) {
+  const active = region || regionById("tx");
   const clean = String(zip || "").replace(/\D/g, "").slice(0, 5);
   const pounds = Math.max(0.5, (Number(weightOz) || 16) / 16);
-  const city = localCity(clean);
+  const zone = zoneForZip(active, clean);
   if (mode === "local" || localOnly) {
-    if (!city) return { ok: false, error: "Local delivery and errands run in Lubbock and Wolfforth. Use a 79401–79499 or 79382 ZIP." };
-    const base = city === "Wolfforth" ? 800 : 600;
+    if (!zone) return { ok: false, error: active?.deliveryNote || "That ZIP is outside local delivery." };
     const extra = Math.max(0, Math.ceil(pounds - 3)) * 150;
-    return { ok: true, cents: base + extra, label: `${city} delivery`, city, zip: clean };
+    return { ok: true, cents: Number(zone.feeCents || 0) + extra, label: `${zone.city} delivery`, city: zone.city, zip: clean };
   }
   if (!/^\d{5}$/.test(clean)) return { ok: false, error: "Enter a 5-digit ZIP code for the shipping estimate." };
   const n = Number(clean);
@@ -284,6 +284,8 @@ function publicProduct(row) {
     weightOz: Number(row.weight_oz) || 16,
     localOnly: Boolean(row.local_only),
     ageRestricted: Boolean(row.age_restricted),
+    region: row.region_id || "",
+    householdId: row.household_id || "home",
     variants: variants.map((entry) => ({
       id: String(entry.id || ""),
       label: String(entry.label || ""),
@@ -331,7 +333,13 @@ const MENU_REFRESH = new Set([
   "stripes-drinks",
   "stripes-sweets",
   "stripes-snacks",
-  "convenience-errand"
+  "convenience-errand",
+  "sheetz-breakfast",
+  "sheetz-lunch",
+  "sheetz-drinks",
+  "sheetz-snacks",
+  "sheetz-errand",
+  "kitchen-apron"
 ]);
 
 async function fillShopPictures(store) {
@@ -340,57 +348,100 @@ async function fillShopPictures(store) {
   }
 }
 
+function serviceCatalog() {
+  const brand = resolveBrand();
+  const located = new Map(regionProducts().filter((product) => product.region).map((product) => [product.id, product.region]));
+  const seeded = SEED.map((product) => ({
+    ...product,
+    region: product.region || located.get(product.id) || "",
+    title: fillCopy(product.title, brand),
+    blurb: fillCopy(product.blurb, brand)
+  }));
+  const extras = regionProducts().filter((product) => product.title).map((product) => ({
+    ...product,
+    title: fillCopy(product.title, brand),
+    blurb: fillCopy(product.blurb, brand),
+    variants: product.variants || [],
+    region: product.region || ""
+  }));
+  const seen = new Set(seeded.map((product) => product.id));
+  return seeded.concat(extras.filter((product) => !seen.has(product.id)));
+}
+
 async function insertProduct(store, product, now) {
   await store.run(
     `INSERT INTO shop_products (
       id, title, blurb, category, price_cents, sale_cents, ribbon, image, stock, featured,
-      weight_oz, local_only, age_restricted, variants_json, sort_order, active, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'in', ?, ?, ?, ?, ?, ?, 1, ?)`,
+      weight_oz, local_only, age_restricted, variants_json, sort_order, active, updated_at, region_id
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'in', ?, ?, ?, ?, ?, ?, 1, ?, ?)`,
     product.id, product.title, product.blurb, product.category, product.priceCents, product.saleCents,
     product.ribbon, product.image, product.featured ? 1 : 0, product.weightOz, product.localOnly ? 1 : 0,
-    product.ageRestricted ? 1 : 0, JSON.stringify(product.variants), product.sort, now
+    product.ageRestricted ? 1 : 0, JSON.stringify(product.variants || []), product.sort, now, product.region || ""
   );
 }
 
 async function ensureMenu(store) {
   const now = new Date().toISOString();
-  for (const product of SEED) {
+  for (const product of serviceCatalog()) {
     const existing = await store.get("SELECT id FROM shop_products WHERE id = ?", product.id);
     if (!existing) {
       await insertProduct(store, product, now);
       continue;
     }
+    if (product.region) {
+      await store.run("UPDATE shop_products SET region_id = ? WHERE id = ? AND (region_id IS NULL OR region_id = '')", product.region, product.id);
+    }
     if (!MENU_REFRESH.has(product.id)) continue;
     await store.run(
       `UPDATE shop_products SET
         title = ?, blurb = ?, category = ?, price_cents = ?, sale_cents = ?, ribbon = ?, image = ?,
-        weight_oz = ?, local_only = ?, age_restricted = ?, variants_json = ?, sort_order = ?, active = 1, updated_at = ?
+        weight_oz = ?, local_only = ?, age_restricted = ?, variants_json = ?, sort_order = ?, region_id = ?, active = 1, updated_at = ?
        WHERE id = ?`,
       product.title, product.blurb, product.category, product.priceCents, product.saleCents, product.ribbon, product.image,
-      product.weightOz, product.localOnly ? 1 : 0, product.ageRestricted ? 1 : 0, JSON.stringify(product.variants),
-      product.sort, now, product.id
+      product.weightOz, product.localOnly ? 1 : 0, product.ageRestricted ? 1 : 0, JSON.stringify(product.variants || []),
+      product.sort, product.region || "", now, product.id
     );
   }
 }
 
 export async function readyShop(store) {
   await store.tables();
+  for (const sql of [
+    "ALTER TABLE shop_products ADD COLUMN region_id TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE shop_products ADD COLUMN household_id TEXT NOT NULL DEFAULT 'home'",
+    "ALTER TABLE shop_orders ADD COLUMN household_id TEXT NOT NULL DEFAULT 'home'",
+    "ALTER TABLE shop_orders ADD COLUMN payment_provider TEXT NOT NULL DEFAULT ''"
+  ]) {
+    try { await store.run(sql); } catch { /* the column is already there */ }
+  }
   const row = await store.get("SELECT COUNT(*) AS n FROM shop_products");
   if (Number(row?.n) === 0) {
     const now = new Date().toISOString();
-    for (const product of SEED) await insertProduct(store, product, now);
+    for (const product of serviceCatalog()) await insertProduct(store, product, now);
   }
   await fillShopPictures(store);
   await ensureMenu(store);
 }
 
-export async function listProducts(store, category = "all") {
+export async function listProducts(store, category = "all", regionId = "tx", householdId = "home") {
   await readyShop(store);
   const rows = await store.all("SELECT * FROM shop_products WHERE active = 1 ORDER BY sort_order, title");
-  const products = rows.map(publicProduct);
+  const active = regionById(regionId) || regionById("tx");
+  const family = householdId || "home";
+  const products = rows.map(publicProduct).filter((product) => {
+    const owner = product.householdId || "home";
+    if (owner !== "home" && owner !== family) return false;
+    if (product.category !== "errands") return true;
+    return (product.region || "tx") === active.id;
+  });
   const name = String(category || "all");
   return {
-    categories: SHOP_CATEGORIES.map(([id, label]) => ({ id, label })),
+    region: active.id,
+    chain: active.chain,
+    categories: SHOP_CATEGORIES.map(([id, label]) => ({
+      id,
+      label: id === "errands" ? active.errandLabel : label
+    })),
     products: name === "all" ? products : products.filter((product) => product.category === name)
   };
 }
@@ -425,8 +476,9 @@ function cleanVariants(value) {
   }).filter((entry) => entry.label && entry.priceCents > 0);
 }
 
-export async function saveProduct(store, body, id) {
+export async function saveProduct(store, body, id, householdId = "home") {
   await readyShop(store);
+  const family = householdId || "home";
   const title = String(body.title || "").trim().slice(0, 120);
   const blurb = String(body.blurb || body.description || "").trim().slice(0, 2000);
   const category = SHOP_CATEGORIES.some(([key]) => key === body.category) ? body.category : "";
@@ -439,7 +491,10 @@ export async function saveProduct(store, body, id) {
   const variants = cleanVariants(body.variants);
   const now = new Date().toISOString();
   const productId = String(id || body.id || title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 48) || "item");
-  const existing = await store.get("SELECT id, image FROM shop_products WHERE id = ?", productId);
+  const existing = await store.get("SELECT id, image, household_id FROM shop_products WHERE id = ?", productId);
+  if (existing && (existing.household_id || "home") !== family) {
+    return { error: "That item belongs to another family.", status: 403 };
+  }
   const image = String(body.image || existing?.image || "").trim().slice(0, 300);
   const fields = [
     title, blurb, category, priceCents, saleCents, String(body.ribbon || "").trim().slice(0, 24), image,
@@ -458,17 +513,21 @@ export async function saveProduct(store, body, id) {
     await store.run(
       `INSERT INTO shop_products (
         title, blurb, category, price_cents, sale_cents, ribbon, image, stock, featured, weight_oz,
-        local_only, age_restricted, variants_json, updated_at, id, sort_order, active
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
-      ...fields.slice(0, -1), productId, Number(sortRow?.n || 0) + 1
+        local_only, age_restricted, variants_json, updated_at, id, sort_order, active, household_id
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)`,
+      ...fields.slice(0, -1), productId, Number(sortRow?.n || 0) + 1, family
     );
   }
   const saved = await store.get("SELECT * FROM shop_products WHERE id = ?", productId);
   return { product: publicProduct(saved) };
 }
 
-export async function removeProduct(store, id) {
+export async function removeProduct(store, id, householdId = "home") {
   await readyShop(store);
+  const existing = await store.get("SELECT household_id FROM shop_products WHERE id = ?", id);
+  if (existing && (existing.household_id || "home") !== (householdId || "home")) {
+    return { error: "That item belongs to another family.", status: 403 };
+  }
   await store.run("UPDATE shop_products SET active = 0, updated_at = ? WHERE id = ?", new Date().toISOString(), id);
   return { ok: true };
 }
@@ -506,15 +565,16 @@ async function priceLines(store, items) {
   return { lines, localOnly, ageRestricted, weightOz };
 }
 
-export async function quoteShipping(store, body) {
+export async function quoteShipping(store, body, region) {
   await readyShop(store);
   const priced = await priceLines(store, body.items);
   if (priced.error) return priced;
+  const active = region || regionById(body.region) || regionById("tx");
   const mode = body.mode === "ship" ? "ship" : "local";
   if (mode === "ship" && priced.localOnly) {
-    return { error: "Fresh meals and Lubbock errands stay in town. Switch to local delivery.", status: 400 };
+    return { error: `Fresh meals and ${active.chain} errands stay in town. Switch to local delivery.`, status: 400 };
   }
-  const fee = estimateFee({ zip: body.zip, weightOz: priced.weightOz, mode, localOnly: priced.localOnly });
+  const fee = estimateFee({ zip: body.zip, weightOz: priced.weightOz, mode, localOnly: priced.localOnly, region: active });
   if (!fee.ok) return { error: fee.error, status: 400 };
   const subtotal = priced.lines.reduce((sum, line) => sum + line.lineCents, 0);
   return {
@@ -527,8 +587,9 @@ export async function quoteShipping(store, body) {
   };
 }
 
-function orderCode() {
-  return `LRB-${Math.floor(1000 + Math.random() * 9000)}`;
+function orderCode(prefix) {
+  const head = String(prefix || "LRB").replace(/[^A-Za-z0-9]/g, "").slice(0, 6) || "LRB";
+  return `${head}-${Math.floor(1000 + Math.random() * 9000)}`;
 }
 
 function telegramText(order) {
@@ -536,9 +597,10 @@ function telegramText(order) {
     const name = `- ${line.qty}x ${line.title}${line.variantLabel ? ` (${line.variantLabel})` : ""}`;
     return line.detail ? `${name}\n  Details: ${line.detail}` : name;
   }).join("\n");
-  const where = [order.address, [order.city, "TX", order.zip].filter(Boolean).join(" ")].filter(Boolean).join(" / ");
+  const where = [order.address, [order.city, order.regionCode, order.zip].filter(Boolean).join(" ")].filter(Boolean).join(" / ");
   const runner = order.runner ? `\n- Runner: ${order.runner}` : "";
   const note = order.note ? `\n📝 Order note: ${order.note}` : "";
+  const payment = order.payLabel || "Payment pending";
   return [
     `🚨 NEW ORDER RECEIVED! [#${order.id}]`,
     `💰 Total: ${money(order.totalCents)}`,
@@ -546,7 +608,7 @@ function telegramText(order) {
     `📍 Address / Delivery Zone: ${where || order.label}`,
     "📦 Items:",
     lines + runner + note,
-    `💳 Payment: Pending via Cash App ($${CASH_TAG})`
+    `💳 ${payment}`
   ].join("\n");
 }
 
@@ -569,44 +631,70 @@ export async function notifyShop(env, order) {
   }
 }
 
-export async function placeOrder(store, body, env) {
+export async function placeOrder(store, body, env, context = {}) {
   await readyShop(store);
+  const brand = context.brand || resolveBrand(env);
+  const household = context.household || null;
+  const payments = context.payments || resolvePayments(env, household);
+  const region = context.region || regionById(body.region) || regionById(brand.defaultRegion);
   const name = String(body.name || "").trim().slice(0, 80);
   const phone = String(body.phone || "").trim().slice(0, 30);
   const address = String(body.address || "").trim().slice(0, 160);
   const city = String(body.city || "").trim().slice(0, 60);
   if (name.length < 2) return { error: "Add the name for the order.", status: 400 };
   if (phone.length < 7) return { error: "Add a phone number.", status: 400 };
-  const quote = await quoteShipping(store, body);
+  const quote = await quoteShipping(store, body, region);
   if (quote.error) return quote;
   const priced = await priceLines(store, body.items);
   if (priced.ageRestricted && !body.ageOk) {
     return { error: "Cigarettes and beer or wine need a 21+ ID at the door. Check the box to confirm.", status: 400 };
   }
   const needsRunner = priced.lines.some((line) => line.category === "errands");
-  const runner = ["Leroy", "Rex"].includes(body.runner) ? body.runner : "";
+  const runners = region?.runners || [];
+  const runner = runners.includes(body.runner) ? body.runner : "";
   if (needsRunner && (body.mode !== "ship") && !runner) {
-    return { error: "Pick Leroy or Rex for the Lubbock errand.", status: 400 };
+    return { error: `Pick ${runners.join(" or ") || "a runner"} for the ${region?.chain || "local"} errand.`, status: 400 };
   }
   if ((body.mode === "local" || priced.localOnly) && !address) {
     return { error: "Add the street address for the drop-off.", status: 400 };
   }
-  let id = orderCode();
+  const plan = checkoutPlan(payments, body.payMethod || body.provider, quote.totalCents);
+  if (plan.error) return plan;
+  let id = orderCode(brand.orderPrefix);
   for (let attempt = 0; attempt < 5; attempt += 1) {
     const taken = await store.get("SELECT id FROM shop_orders WHERE id = ?", id);
     if (!taken) break;
-    id = orderCode();
+    id = orderCode(brand.orderPrefix);
+  }
+  let paymentStatus = "pending";
+  let squarePaymentId = "";
+  if (plan.provider === "square") {
+    const token = await squareAccessToken(env, household);
+    const charged = await chargeSquare({
+      token,
+      sourceId: body.sourceId,
+      amountCents: quote.totalCents,
+      locationId: plan.locationId,
+      orderId: id,
+      sandbox: plan.sandbox
+    });
+    if (!charged.ok) return { error: charged.error, status: 400 };
+    paymentStatus = "paid";
+    squarePaymentId = charged.paymentId || "";
   }
   const now = new Date().toISOString();
+  const payLabel = plan.provider === "cashapp"
+    ? `Payment: Pending via Cash App ($${plan.cashtag})`
+    : `Payment: ${paymentStatus} via Square`;
   await store.run(
     `INSERT INTO shop_orders (
       id, created_at, customer_name, phone, address, city, zip, mode, runner, items_json,
-      subtotal_cents, shipping_cents, total_cents, age_ok, payment_status, note
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)`,
+      subtotal_cents, shipping_cents, total_cents, age_ok, payment_status, note, household_id, payment_provider
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     id, now, name, phone, address, city || quote.city, String(body.zip || "").replace(/\D/g, "").slice(0, 5),
     body.mode === "ship" ? "ship" : "local", runner, JSON.stringify(quote.lines),
-    quote.subtotalCents, quote.shippingCents, quote.totalCents, body.ageOk ? 1 : 0,
-    String(body.note || "").slice(0, 300)
+    quote.subtotalCents, quote.shippingCents, quote.totalCents, body.ageOk ? 1 : 0, paymentStatus,
+    String(body.note || "").slice(0, 300), context.householdId || household?.id || "home", plan.provider
   );
   const order = {
     id,
@@ -615,11 +703,13 @@ export async function placeOrder(store, body, env) {
     address,
     city: city || quote.city,
     zip: String(body.zip || "").replace(/\D/g, "").slice(0, 5),
+    regionCode: (region?.states || [])[0] || "",
     label: quote.label,
     lines: quote.lines,
     totalCents: quote.totalCents,
     runner,
-    note: String(body.note || "").trim().slice(0, 300)
+    note: String(body.note || "").trim().slice(0, 300),
+    payLabel
   };
   const notice = await notifyShop(env, order);
   return {
@@ -629,8 +719,15 @@ export async function placeOrder(store, body, env) {
       subtotalCents: quote.subtotalCents,
       shippingCents: quote.shippingCents,
       label: quote.label,
-      cashTag: CASH_TAG,
-      cashUrl: cashLink(quote.totalCents),
+      payment: {
+        provider: plan.provider,
+        status: paymentStatus,
+        cashTag: plan.provider === "cashapp" ? plan.cashtag : "",
+        cashUrl: plan.provider === "cashapp" ? plan.cashUrl : "",
+        squarePaymentId: plan.provider === "square" ? squarePaymentId : ""
+      },
+      cashTag: plan.provider === "cashapp" ? plan.cashtag : "",
+      cashUrl: plan.provider === "cashapp" ? plan.cashUrl : "",
       lines: quote.lines,
       telegram: notice.state || notice,
       telegramReason: notice.reason || ""

@@ -1,5 +1,6 @@
 import { attachCallMedia, bindDesk, callLayer, clearCallSound, deskAction, deskNavigated, deskSubmit, deskTick, linkTools, messagesView, pageLink, paintDeskBadge, previewCallSound, ringerLabel, saveCallSound, searchView, warmRinger } from "./desk.js?v=26";
-import { loadCart, shopClick, shopSubmit, shopView, addRecipeIngredientsToCart } from "./shop.js?v=6";
+import { loadCart, shopClick, shopSubmit, shopView, addRecipeIngredientsToCart, mountSquare } from "./shop.js?v=7";
+import { brand, loadWhiteLabel, locateFamily, paintCopy } from "./brand.js?v=1";
 
 const API = window.APP_CONFIG?.apiBase || "";
 const LISA_CHANNEL_ID = "UCOQlqCabDLlzQEzlcHfvXzg";
@@ -2277,7 +2278,7 @@ async function loadChannels(forceSync = false) {
 }
 
 async function syncLisaYouTube(interactive = true) {
-  if (interactive) say("Checking @LisasKitchenStudio for latest uploads... ⏳");
+  if (interactive) say(`Checking ${brand().studioHandle} for latest uploads...`);
   try {
     const res = await api("/api/channels/sync").catch(() => null);
     if (res?.channels?.length) {
@@ -2289,7 +2290,7 @@ async function syncLisaYouTube(interactive = true) {
   } catch {}
 
   try {
-    const rssUrl = `https://www.youtube.com/feeds/videos.xml?channel_id=${LISA_CHANNEL_ID}`;
+    const rssUrl = `https://www.youtube.com/feeds/videos.xml?channel_id=${brand().studioChannelId || LISA_CHANNEL_ID}`;
     const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(rssUrl)}`;
     const feedRes = await fetch(proxyUrl, { signal: AbortSignal.timeout(6000) });
     if (feedRes.ok) {
@@ -3035,7 +3036,10 @@ function render() {
   }
   if (state.incoming) document.title = `${state.incoming.person?.name || "Someone"} is calling`;
   else if (state.call) document.title = state.call.phase === "live" ? `On a call with ${state.call.person?.name || "family"}` : `Calling ${state.call.person?.name || "family"}`;
+  html = paintCopy(html);
+  document.title = paintCopy(document.title);
   root.innerHTML = html;
+  mountSquare(state).catch(() => {});
   paintFilmCovers();
   state.menuFresh = false;
   document.body.classList.toggle("menu-open", state.menu);
@@ -4636,7 +4640,7 @@ async function scheduleTimerAlert(endAt) {
       return;
     } catch { /* the service worker will watch the clock instead */ }
   }
-  registration.active?.postMessage({ type: "timer-start", endAt });
+  registration.active?.postMessage({ type: "timer-start", endAt, title: brand().name });
 }
 
 function clearTimerAlert() {
@@ -4853,6 +4857,14 @@ render();
 
 // 2. Load recipes, notes, and user data asynchronously
 async function bootApp() {
+  try {
+    await loadWhiteLabel(api);
+    locateFamily(api).then(() => {
+      state.shopLoaded = false;
+      render();
+    }).catch(() => {});
+  } catch {}
+
   try {
     const boot = await api("/api/recipes").catch(() => null);
     if (boot?.recipes?.length) {

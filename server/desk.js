@@ -142,9 +142,15 @@ async function activeIds(db) {
   return new Set(rows.map((row) => String(row.id)));
 }
 
-async function otherUser(db, id) {
-  const row = await db.get("SELECT id, name, bio, avatar_path FROM users WHERE id = ?", [id]);
+async function otherUser(db, id, userId) {
+  const row = await db.get("SELECT id, name, bio, avatar_path, household_id FROM users WHERE id = ?", [id]);
   if (!row) throw deskFail("That person is not in the book.", 404);
+  if (userId != null) {
+    const me = await db.get("SELECT household_id FROM users WHERE id = ?", [userId]);
+    const mine = me?.household_id || "home";
+    const theirs = row.household_id || "home";
+    if (mine !== theirs) throw deskFail("That person is not in this family.", 404);
+  }
   return personOf(row);
 }
 
@@ -162,7 +168,10 @@ function messageOf(row, userId) {
 
 export async function listThreads(db, userId) {
   await touch(db, userId);
-  const people = await db.all("SELECT id, name, bio, avatar_path FROM users WHERE id != ? ORDER BY name COLLATE NOCASE", [userId]);
+  const people = await db.all(
+    "SELECT id, name, bio, avatar_path FROM users WHERE id != ? AND COALESCE(household_id, 'home') = COALESCE((SELECT household_id FROM users WHERE id = ?), 'home') ORDER BY name COLLATE NOCASE",
+    [userId, userId]
+  );
   const messages = await db.all(
     `SELECT id, sender_id, recipient_id, body, created_at, seen FROM messages
      WHERE sender_id = ? OR recipient_id = ? ORDER BY id DESC LIMIT 300`,
@@ -201,7 +210,7 @@ export async function listThreads(db, userId) {
 
 export async function readThread(db, userId, withId, after = 0) {
   if (String(withId) === String(userId)) throw deskFail("That is your own account.");
-  const person = await otherUser(db, withId);
+  const person = await otherUser(db, withId, userId);
   await touch(db, userId);
   await db.run(
     "UPDATE messages SET seen = 1 WHERE recipient_id = ? AND sender_id = ? AND seen = 0",
@@ -222,7 +231,7 @@ export async function sendMessage(db, userId, { to, body }) {
   if (!text) throw deskFail("Write a message first.");
   if (text.length > 1000) throw deskFail("That message is too long. Keep it under 1000 characters.");
   if (String(to) === String(userId)) throw deskFail("That is your own account.");
-  await otherUser(db, to);
+  await otherUser(db, to, userId);
   await touch(db, userId);
   const created = nowIso();
   const saved = await db.run(
@@ -267,7 +276,7 @@ export async function placeCall(db, userId, { to, mode, offer }) {
   const sdp = String(offer || "");
   if (sdp.length < 20 || sdp.length > 20000) throw deskFail("The call did not start. Try again.");
   if (String(to) === String(userId)) throw deskFail("That is your own account.");
-  const person = await otherUser(db, to);
+  const person = await otherUser(db, to, userId);
   const busy = await db.get(
     `SELECT id FROM calls WHERE state IN ('ringing', 'live') AND (caller_id = ? OR callee_id = ? OR caller_id = ? OR callee_id = ?)`,
     [userId, userId, to, to]
@@ -309,7 +318,7 @@ export async function setCall(db, userId, callId, { action, answer }) {
 async function loadCall(db, userId, callId) {
   const call = await mustCall(db, userId, callId);
   const otherId = String(call.caller_id) === String(userId) ? call.callee_id : call.caller_id;
-  const person = await otherUser(db, otherId);
+  const person = await otherUser(db, otherId, userId);
   return { call: callOf(call, userId, person) };
 }
 
@@ -357,7 +366,7 @@ export async function deskSnapshot(db, userId) {
   );
   let incoming = null;
   if (incomingRow) {
-    const person = await otherUser(db, incomingRow.caller_id);
+    const person = await otherUser(db, incomingRow.caller_id, userId);
     incoming = callOf(incomingRow, userId, person);
   }
   const openRow = await db.get(
@@ -367,7 +376,7 @@ export async function deskSnapshot(db, userId) {
   let open = null;
   if (openRow) {
     const otherId = String(openRow.caller_id) === String(userId) ? openRow.callee_id : openRow.caller_id;
-    const person = await otherUser(db, otherId);
+    const person = await otherUser(db, otherId, userId);
     open = callOf(openRow, userId, person);
   }
   const online = await activeIds(db);

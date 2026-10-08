@@ -1,0 +1,156 @@
+{
+  "tx": {
+    "id": "tx",
+    "label": "Texas",
+    "chain": "Stripes",
+    "service": "stripes",
+    "states": ["TX"],
+    "bounds": { "south": 25.8, "north": 36.5, "west": -106.7, "east": -93.5 },
+    "deliveryNote": "Local deliveries cover Lubbock (79401–79499) and Wolfforth (79382). Fresh meals and Stripes errands stay in town. Spices and dry dog treats can ship nationwide.",
+    "zones": [
+      { "from": 79401, "to": 79499, "city": "Lubbock", "feeCents": 600 },
+      { "exact": 79382, "city": "Wolfforth", "feeCents": 800 }
+    ],
+    "runners": ["Leroy", "Rex"],
+    "errandLabel": "Local Errands (Lubbock / Wolfforth)",
+    "productIds": [
+      "laredo-taco-pack",
+      "stripes-breakfast",
+      "stripes-lunch",
+      "stripes-dinner",
+      "stripes-drinks",
+      "stripes-sweets",
+      "stripes-snacks",
+      "convenience-errand"
+    ],
+    "products": []
+  },
+  "va": {
+    "id": "va",
+    "label": "Virginia",
+    "chain": "Sheetz",
+    "service": "sheetz",
+    "states": ["VA"],
+    "bounds": { "south": 36.54, "north": 39.47, "west": -83.68, "east": -75.24 },
+    "deliveryNote": "Local deliveries cover Virginia Sheetz runs. Fresh meals and made-to-order Sheetz stops stay in Virginia. Spices and dry dog treats can ship nationwide.",
+    "zones": [
+      { "from": 20101, "to": 20198, "city": "Northern Virginia", "feeCents": 700 },
+      { "from": 22003, "to": 24658, "city": "Virginia", "feeCents": 700 }
+    ],
+    "runners": ["Alex", "Jordan"],
+    "errandLabel": "Local Errands (Sheetz)",
+    "productIds": [
+      "sheetz-breakfast",
+      "sheetz-lunch",
+      "sheetz-drinks",
+      "sheetz-snacks",
+      "sheetz-errand"
+    ],
+    "products": [
+      {
+        "id": "sheetz-breakfast",
+        "title": "Sheetz Breakfast",
+        "blurb": "Made to order at Sheetz. A breakfast sandwich, burrito, or bowl, picked up fresh.",
+        "category": "errands",
+        "priceCents": 349,
+        "saleCents": null,
+        "ribbon": "",
+        "image": "/images/shop-breakfast-tacos.jpg",
+        "featured": 0,
+        "weightOz": 8,
+        "localOnly": 1,
+        "ageRestricted": 0,
+        "sort": 40,
+        "variants": [
+          { "id": "sausage-egg", "label": "Sausage, egg, and cheese sandwich", "priceCents": 399, "weightOz": 8 },
+          { "id": "bacon-egg", "label": "Bacon, egg, and cheese sandwich", "priceCents": 399, "weightOz": 8 },
+          { "id": "burrito", "label": "Breakfast burrito", "priceCents": 449, "weightOz": 10 },
+          { "id": "bowl", "label": "Breakfast bowl", "priceCents": 499, "weightOz": 12 }
+        ]
+      },
+      {
+        "id": "sheetz-lunch",
+        "title": "Sheetz Lunch",
+        "blurb": "A burger, sub, or fried chicken sandwich from the Sheetz counter.",
+        "category": "errands",
+        "priceCents": 499,
+        "saleCents": null,
+        "ribbon": "",
+        "image": "/images/shop-stripes-lunch.jpg",
+        "featured": 0,
+        "weightOz": 10,
+        "localOnly": 1,
+        "ageRestricted": 0,
+        "sort": 41,
+        "variants": [
+          { "id": "burger", "label": "Burger", "priceCents": 599, "weightOz": 10 },
+          { "id": "chicken", "label": "Chicken sandwich", "priceCents": 649, "weightOz": 10 },
+          { "id": "sub", "label": "Cold sub", "priceCents": 699, "weightOz": 12 },
+          { "id": "fries", "label": "Fries", "priceCents": 249, "weightOz": 6 }
+        ]
+      },
+      {
+        "id": "sheetz-drinks",
+        "title": "Sheetz Drinks",
+        "blurb": "Coffee, a milkshake, or a fountain drink from Sheetz. Beer needs a 21+ ID at the door.",
+        "category": "errands",
+        "priceCents": 199,
+        "saleCents": null,
+        "ribbon": "",
+        "image": "/images/shop-stripes-drinks.jpg",
+        "featured": 0,
+        "weightOz": 16,
+        "localOnly": 1,
+        "ageRestricted": 0,
+        "sort": 42,
+        "variants": [
+          { "id": "coffee", "label": "Coffee", "priceCents": 199, "weightOz": 12 },
+          { "id": "shake", "label": "Milkshake", "priceCents": 349, "weightOz": 16 },
+          { "id": "fountain", "label": "Fountain drink", "priceCents": 179, "weightOz": 16 },
+          { "id": "beer", "label": "Domestic beer (21+ ID at the door)", "priceCents": 299, "weightOz": 12, "age": true }
+        ]
+      },
+      {
+        "id": "sheetz-snacks",
+        "title": "Sheetz Snacks",
+        "blurb": "Fries, a pretzel, candy, or a muffin from Sheetz.",
+        "category": "errands",
+        "priceCents": 179,
+        "saleCents": null,
+        "ribbon": "",
+        "image": "/images/shop-stripes-snacks.jpg",
+        "featured": 0,
+        "weightOz": 6,
+        "localOnly": 1,
+        "ageRestricted": 0,
+        "sort": 43,
+        "variants": [
+          { "id": "pretzel", "label": "Pretzel", "priceCents": 249, "weightOz": 6 },
+          { "id": "muffin", "label": "Muffin", "priceCents": 199, "weightOz": 5 },
+          { "id": "candy", "label": "Candy", "priceCents": 219, "weightOz": 3 }
+        ]
+      },
+      {
+        "id": "sheetz-errand",
+        "title": "Custom Errand",
+        "blurb": "A Virginia runner can pick up a prescription or a small store order. The price is the runner trip, not the store price. Cigarettes and alcohol need a 21+ ID at the door.",
+        "category": "errands",
+        "priceCents": 800,
+        "saleCents": null,
+        "ribbon": "",
+        "image": "/images/shop-errand.jpg",
+        "featured": 0,
+        "weightOz": 8,
+        "localOnly": 1,
+        "ageRestricted": 0,
+        "sort": 44,
+        "variants": [
+          { "id": "meds", "label": "Prescription pickup", "priceCents": 800, "weightOz": 8 },
+          { "id": "smokes", "label": "Cigarettes", "priceCents": 1000, "weightOz": 4, "age": true },
+          { "id": "beer", "label": "Beer", "priceCents": 1200, "weightOz": 16, "age": true },
+          { "id": "alcohol", "label": "Wine or other alcohol", "priceCents": 1200, "weightOz": 16, "age": true }
+        ]
+      }
+    ]
+  }
+}

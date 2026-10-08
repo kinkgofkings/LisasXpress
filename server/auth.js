@@ -51,6 +51,8 @@ export function publicUser(row) {
     email: row.email,
     name: row.name,
     bio: row.bio,
-    avatar: row.avatar_path
+    avatar: row.avatar_path,
+    role: row.role || "member",
+    householdId: row.household_id || "home"
   };
 }

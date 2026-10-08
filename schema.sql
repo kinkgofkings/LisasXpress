@@ -5,7 +5,9 @@ CREATE TABLE IF NOT EXISTS users (
   name TEXT NOT NULL,
   bio TEXT NOT NULL DEFAULT '',
   avatar_path TEXT NOT NULL DEFAULT '',
-  created_at TEXT NOT NULL
+  created_at TEXT NOT NULL,
+  household_id TEXT NOT NULL DEFAULT 'home',
+  role TEXT NOT NULL DEFAULT 'member'
 );
 CREATE TABLE IF NOT EXISTS recipes (
   id TEXT PRIMARY KEY,
@@ -43,7 +45,8 @@ CREATE TABLE IF NOT EXISTS notes (
   title TEXT NOT NULL,
   body TEXT NOT NULL DEFAULT '',
   attachments TEXT NOT NULL DEFAULT '[]',
-  updated_at TEXT NOT NULL
+  updated_at TEXT NOT NULL,
+  household_id TEXT NOT NULL DEFAULT 'home'
 );
 CREATE TABLE IF NOT EXISTS files (
   path TEXT PRIMARY KEY,
@@ -140,7 +143,9 @@ CREATE TABLE IF NOT EXISTS shop_products (
   variants_json TEXT NOT NULL DEFAULT '[]',
   sort_order INTEGER NOT NULL DEFAULT 0,
   active INTEGER NOT NULL DEFAULT 1,
-  updated_at TEXT NOT NULL
+  updated_at TEXT NOT NULL,
+  region_id TEXT NOT NULL DEFAULT '',
+  household_id TEXT NOT NULL DEFAULT 'home'
 );
 CREATE TABLE IF NOT EXISTS shop_orders (
   id TEXT PRIMARY KEY,
@@ -158,5 +163,18 @@ CREATE TABLE IF NOT EXISTS shop_orders (
   total_cents INTEGER NOT NULL,
   age_ok INTEGER NOT NULL DEFAULT 0,
   payment_status TEXT NOT NULL DEFAULT 'pending',
-  note TEXT NOT NULL DEFAULT ''
+  note TEXT NOT NULL DEFAULT '',
+  household_id TEXT NOT NULL DEFAULT 'home',
+  payment_provider TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS households (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  invite_code TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS household_settings (
+  household_id TEXT PRIMARY KEY,
+  settings_json TEXT NOT NULL DEFAULT '{}',
+  updated_at TEXT NOT NULL
 );

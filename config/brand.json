@@ -1,0 +1,26 @@
+{
+  "id": "home",
+  "name": "Lisa's Recipe Book",
+  "shortName": "Lisa's Xpress",
+  "heroTitle": "Lisa's Kitchen & Deliveries",
+  "badge": "Lisa's Survivor Kitchen",
+  "studioName": "Lisa's Kitchen Studio",
+  "studioHandle": "@LisasKitchenStudio",
+  "studioUrl": "https://www.youtube.com/@LisasKitchenStudio",
+  "studioChannelId": "UCOQlqCabDLlzQEzlcHfvXzg",
+  "tagline": "A Cajun and Texas cookbook with family recipes, notes, pictures, and an open recipe library.",
+  "domain": "https://lisa.synthetix-labz.cloud/",
+  "themeColor": "#d81b60",
+  "ownerName": "Lisa",
+  "ownerEmail": "lisa@lisasxpress.com",
+  "adminEmails": ["lisa@lisasxpress.com", "james@recipebook.family"],
+  "quickSignIn": true,
+  "quickSignInLabel": "Quick Sign In as Lisa (Mom)",
+  "imageCredit": "Photograph for Lisa's Recipe Book",
+  "orderPrefix": "LRB",
+  "defaultRegion": "tx",
+  "payments": {
+    "cashapp": { "enabled": true, "cashtag": "Yellow9859" },
+    "square": { "enabled": true }
+  }
+}
