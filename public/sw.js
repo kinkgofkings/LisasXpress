@@ -29,7 +29,7 @@ self.addEventListener("message", (event) => {
   const endAt = Number(event.data.endAt) || 0;
   const delay = Math.max(0, endAt - Date.now());
   timerHandle = setTimeout(() => {
-    self.registration.showNotification("Lisa's Recipe Book", {
+    self.registration.showNotification(event.data?.title || "Recipe Book", {
       body: "The timer is up.",
       tag: "lisa-timer",
       renotify: true,

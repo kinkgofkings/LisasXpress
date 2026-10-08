@@ -7,8 +7,14 @@ const CATS = [
   ["treats", "Doggie Treats"],
   ["accessories", "Cooking Accessories"],
   ["spices", "Signature Spice Blends"],
-  ["errands", "Local Errands (Lubbock / Wolfforth)"]
+  ["errands", "Local Errands"]
 ];
+
+let shopCats = CATS;
+
+function cats() {
+  return shopCats;
+}
 
 export function loadCart() {
   try {
@@ -56,7 +62,7 @@ function draft(state, name, fallback = "") {
 }
 
 function priceLabel(product, esc) {
-  if (product.id === "convenience-errand") return "Runner trip from $8.00";
+  if (product.id === "convenience-errand" || product.id === "sheetz-errand") return "Runner trip from $8.00";
   if (product.variants?.length) {
     const amounts = product.variants.map((entry) => entry.priceCents);
     const low = Math.min(...amounts);
@@ -70,7 +76,7 @@ function priceLabel(product, esc) {
 }
 
 function catLabel(id) {
-  return CATS.find(([key]) => key === id)?.[1] || "Shop";
+  return cats().find(([key]) => key === id)?.[1] || "Shop";
 }
 
 function shopCard(product, esc, asset) {
@@ -116,7 +122,7 @@ function productView(product, esc, asset) {
   const ribbon = product.ribbon ? `<span class="badge">${esc(product.ribbon)}</span>` : "";
   const sold = product.stock === "out";
   const errand = product.category === "errands";
-  const custom = product.id === "convenience-errand" && product.variants?.length
+  const custom = (product.id === "convenience-errand" || product.id === "sheetz-errand") && product.variants?.length
     ? convenienceMenu(product, esc)
     : "";
   const menu = !custom && errand && product.variants?.length
@@ -152,8 +158,13 @@ async function ensureProducts(ctx, force = false) {
   ctx.state.shopLoading = true;
   try {
     const data = await ctx.api("/api/shop/products");
+    const config = await ctx.api("/api/config").catch(() => null);
     ctx.state.shopProducts = data.products || [];
     ctx.state.shopError = "";
+    if (data.categories?.length) shopCats = data.categories.map((entry) => [entry.id, entry.label]);
+    if (config?.brand) ctx.state.brand = config.brand;
+    if (config?.payments) ctx.state.payments = config.payments;
+    if (config?.locale) ctx.state.locale = config.locale;
   } catch (error) {
     ctx.state.shopProducts = [];
     ctx.state.shopError = error.message || "The shop did not open.";
@@ -178,7 +189,7 @@ export function shopView(ctx) {
     return productView(opened, esc, asset);
   }
   const shown = cat === "all" ? products : products.filter((product) => product.category === cat);
-  const chips = CATS.map(([id, label]) => `<button class="chip ${cat === id ? "active" : ""}" type="button" data-action="shop-filter" data-cat="${esc(id)}">${esc(label)}</button>`).join("");
+  const chips = cats().map(([id, label]) => `<button class="chip ${cat === id ? "active" : ""}" type="button" data-action="shop-filter" data-cat="${esc(id)}">${esc(label)}</button>`).join("");
   const body = state.shopError
     ? `<p class="empty">${esc(state.shopError)}</p>`
     : (!state.shopLoaded
@@ -189,7 +200,7 @@ export function shopView(ctx) {
       <div>
         <p class="eyebrow">From Mom's kitchen</p>
         <h2 class="page-title">Shop</h2>
-        <p>Meals, desserts, dog treats, spices, and a Lubbock or Wolfforth errand. Pay with Cash App when you send the order.</p>
+        <p>Meals, desserts, dog treats, spices, and a ${esc(state.locale?.chain || "local")} errand. Pay with the methods this family has turned on.</p>
       </div>
       <div class="actions">
         <a class="btn quiet" href="#/shop/cart"><i class="bi bi-cart" aria-hidden="true"></i> Cart${(state.cart || []).reduce((sum, line) => sum + Number(line.qty || 0), 0) ? ` (${(state.cart || []).reduce((sum, line) => sum + Number(line.qty || 0), 0)})` : ""}</a>
@@ -219,7 +230,7 @@ function studioView(ctx) {
         <div class="field"><label>Price<input name="price" inputmode="decimal" required value="${editing.priceCents ? (editing.priceCents / 100).toFixed(2) : ""}"></label></div>
         <div class="field"><label>Sale price<input name="sale" inputmode="decimal" value="${editing.saleCents ? (editing.saleCents / 100).toFixed(2) : ""}" placeholder="Optional"></label></div>
       </div>
-      <div class="field"><label>Category<select name="category">${CATS.filter(([id]) => id !== "all").map(([id, label]) => `<option value="${id}" ${editing.category === id ? "selected" : ""}>${esc(label)}</option>`).join("")}</select></label></div>
+      <div class="field"><label>Category<select name="category">${cats().filter(([id]) => id !== "all").map(([id, label]) => `<option value="${id}" ${editing.category === id ? "selected" : ""}>${esc(label)}</option>`).join("")}</select></label></div>
       <div class="field"><label>Stock<select name="stock">${["in", "low", "out"].map((id) => `<option value="${id}" ${(editing.stock || "in") === id ? "selected" : ""}>${id === "in" ? "In stock" : id === "low" ? "Running low" : "Sold out"}</option>`).join("")}</select></label></div>
       <div class="field"><label>Sizes, one per line<textarea name="variants" rows="4" placeholder="8 oz | 14.00 | 10">${esc(variantLines(editing))}</textarea></label></div>
       <p class="empty">Write the size, the price, and the weight in ounces. Example: Half dozen | 14.00 | 16</p>
@@ -238,7 +249,7 @@ function studioView(ctx) {
       </div>
     </form>` : `<p><button class="btn moss" type="button" data-action="shop-new">Add an item</button></p>`;
   const rows = (state.shopProducts || []).map((product) => `<article class="shop-manage">
-      <div><strong>${esc(product.title)}</strong><p class="empty">${esc(money(product.saleCents || product.priceCents))} · ${esc(CATS.find(([id]) => id === product.category)?.[1] || product.category)}</p></div>
+      <div><strong>${esc(product.title)}</strong><p class="empty">${esc(money(product.saleCents || product.priceCents))} · ${esc(catLabel(product.category))}</p></div>
       <div class="actions">
         <button class="btn quiet" type="button" data-action="shop-edit" data-id="${esc(product.id)}">Edit</button>
         <button class="btn danger" type="button" data-action="shop-delete" data-id="${esc(product.id)}">Remove</button>
@@ -247,13 +258,14 @@ function studioView(ctx) {
   return `<nav class="crumbs" aria-label="Breadcrumb"><a href="#/shop">Shop</a><span class="crumb-gap" aria-hidden="true">/</span><span aria-current="page">Product studio</span></nav>
     <h2 class="page-title">Product studio</h2>
     <p>Add a meal, a dessert, a treat, a spice, or an errand. The family sees it in the shop as soon as you save it.</p>
+    ${state.user?.role === "admin" ? householdForm(state, esc) : ""}
     ${form}
     <div class="shop-manage-list">${rows || `<p class="empty">No items yet.</p>`}</div>`;
 }
 
 function cartLines(state, esc, asset) {
   return (state.cart || []).map((line) => `<article class="cart-line">
-    <div class="shop-photo mini">${line.image ? `<img src="${esc(asset(line.image))}" alt="">` : `<span class="shop-mark">Lisa's</span>`}</div>
+    <div class="shop-photo mini">${line.image ? `<img src="${esc(asset(line.image))}" alt="">` : `<span class="shop-mark">${esc((state.brand?.shortName || "Kitchen").slice(0, 12))}</span>`}</div>
     <div>
       <strong>${esc(line.title)}</strong>
       ${line.variantLabel ? `<p class="empty">${esc(line.variantLabel)}</p>` : ""}
@@ -304,46 +316,51 @@ function cartView(ctx) {
   const needsRunner = (state.cart || []).some((line) => line.category === "errands");
   const mode = draft(state, "mode", state.shopMode || "local");
   const estimate = state.shopEstimate;
-  const payMethod = draft(state, "payMethod", "cashapp");
+  const providers = (state.payments?.providers || []).filter((provider) => provider.enabled);
+  const payMethod = draft(state, "payMethod", state.payments?.defaultProvider || providers[0]?.id || "cashapp");
+  const cash = providers.find((provider) => provider.id === "cashapp");
+  const square = providers.find((provider) => provider.id === "square");
+  const runners = state.locale?.runners?.length ? state.locale.runners : ["Leroy", "Rex"];
   const guest = state.user ? "" : `<p class="empty" style="color:var(--clay);font-weight:500;">You can send this order as a guest. Log in is optional.</p>`;
-  
-  // Format pre-filled Telegram order message
-  const telegramOrderMsg = order ? [
-    `🚨 NEW LISA'S XPRESS ORDER [#${order.id}]`,
-    `💰 Total: ${money(order.totalCents)}`,
-    `👤 Customer: ${order.name || draft(state, "name")} (${order.phone || draft(state, "phone")})`,
-    `📍 Delivery: ${order.address || draft(state, "address")}, ${order.city || draft(state, "city")} ${order.zip || draft(state, "zip")}`,
-    `📦 Method: ${order.label || "Local Delivery / Runner"}`,
-    `💳 Pay: Cash App ($Yellow9859) / Square`,
-    `\nItems:\n` + (order.lines || []).map(l => `• ${l.qty}x ${l.title} ${l.detail ? `(${l.detail})` : ""}`).join("\n")
-  ].join("\n") : "";
-
-  const telegramShareUrl = `https://t.me/share/url?url=${encodeURIComponent(location.origin)}&text=${encodeURIComponent(telegramOrderMsg)}`;
+  const paidWith = order?.payment?.provider === "square"
+    ? "Square"
+    : order?.payment?.cashTag
+      ? `Cash App ($${order.payment.cashTag})`
+      : "the selected payment method";
+  const cashButton = order?.payment?.provider === "cashapp" && order.cashUrl
+    ? `<a class="btn moss" href="${esc(order.cashUrl)}" target="_blank" rel="noopener" style="font-size:17px;padding:14px 20px;display:flex;align-items:center;justify-content:center;gap:10px;font-weight:700;">
+            <i class="bi bi-currency-dollar"></i> Pay ${esc(money(order.totalCents))} with Cash App ($${esc(order.payment.cashTag)})
+          </a>`
+    : order?.payment?.provider === "square"
+      ? `<p class="empty">Paid with Square${order.payment.status === "paid" ? "" : ""}. Reference ${esc(order.payment.squarePaymentId || order.id)}.</p>`
+      : "";
+  const payChoices = providers.map((provider) => `<label style="display:flex;align-items:center;gap:8px;padding:10px;border:1px solid var(--line);border-radius:10px;background:var(--card);cursor:pointer;">
+              <input type="radio" name="payMethod" value="${esc(provider.id)}" ${payMethod === provider.id ? "checked" : ""}>
+              <span>${provider.id === "cashapp" ? `Cash App ($${esc(provider.cashtag)})` : "Square"}</span>
+            </label>`).join("") || `<p class="empty">This family has not turned on Cash App or Square.</p>`;
+  const squareBox = square && payMethod === "square"
+    ? `<div id="square-card-container" style="margin-top:12px;padding:14px;border:1px solid rgba(0,0,0,0.12);border-radius:12px;background:#fafafa;">
+          <p style="margin:0 0 8px;font-weight:600;">Square secure card form</p>
+          <div id="square-card"></div>
+          <p class="empty">The card number goes to Square. This book never stores it.</p>
+        </div>`
+    : "";
 
   const body = order
     ? `<div class="pay-card panel" style="border:2px solid var(--moss);box-shadow:0 12px 36px rgba(216,27,96,0.15);">
         <div style="display:inline-flex;align-items:center;gap:6px;padding:3px 10px;background:#fce4ec;border-radius:999px;color:#ad1457;font-size:12px;font-weight:600;margin-bottom:8px;">
-          🎗️ Order Confirmed • Lisa's Xpress
+          Order confirmed
         </div>
         <p class="eyebrow" style="color:var(--clay);">Order successfully placed</p>
         <h3 style="font-size:32px;margin:4px 0 10px;color:var(--ink);">#${esc(order.id)}</h3>
         <p style="font-size:17px;">Total: <strong>${esc(money(order.totalCents))}</strong> (${esc(order.label || "Delivery")} is ${esc(money(order.shippingCents))})</p>
-        
         <div style="margin:20px 0;display:flex;flex-direction:column;gap:12px;">
-          <a class="btn moss" href="${esc(order.cashUrl || `https://cash.app/$Yellow9859/${(order.totalCents/100).toFixed(2)}`)}" target="_blank" rel="noopener" style="font-size:17px;padding:14px 20px;display:flex;align-items:center;justify-content:center;gap:10px;font-weight:700;">
-            <i class="bi bi-currency-dollar"></i> Pay ${esc(money(order.totalCents))} with Cash App ($Yellow9859)
-          </a>
-          
-          <a class="btn" href="${telegramShareUrl}" target="_blank" rel="noopener" style="background:#0088cc;color:#fff;border-color:#0088cc;font-size:16px;padding:12px 20px;display:flex;align-items:center;justify-content:center;gap:10px;font-weight:600;">
-            <i class="bi bi-telegram"></i> Send Order to Telegram Chat / Runner
-          </a>
+          ${cashButton}
         </div>
-
-        <div style="background:var(--paper);border:1px dashed var(--line);border-radius:12px;padding:14px;margin:16px 0;text-align:left;">
-          <p style="margin:0 0 6px;font-weight:600;color:var(--ink);">Cash App Instructions:</p>
-          <p style="margin:0;font-size:14px;color:var(--muted);">1. Open Cash App on your phone.<br>2. Send <strong>${esc(money(order.totalCents))}</strong> to <strong>$Yellow9859</strong>.<br>3. Enter <strong>#${esc(order.id)}</strong> in the "For / Note" field.</p>
-        </div>
-
+        ${order.payment?.provider === "cashapp" ? `<div style="background:var(--paper);border:1px dashed var(--line);border-radius:12px;padding:14px;margin:16px 0;text-align:left;">
+          <p style="margin:0 0 6px;font-weight:600;color:var(--ink);">Cash App instructions</p>
+          <p style="margin:0;font-size:14px;color:var(--muted);">1. Open Cash App on your phone.<br>2. Send <strong>${esc(money(order.totalCents))}</strong> to <strong>$${esc(order.payment.cashTag)}</strong>.<br>3. Enter <strong>#${esc(order.id)}</strong> in the note field.</p>
+        </div>` : `<p>Payment method: ${esc(paidWith)}.</p>`}
         <div style="display:flex;flex-wrap:wrap;gap:8px;justify-content:center;margin-top:14px;">
           <button class="btn quiet" type="button" data-action="copy" data-text="#${esc(order.id)}"><i class="bi bi-clipboard"></i> Copy Order #</button>
           <button class="btn quiet" type="button" data-action="shop-done">Back to Shop</button>
@@ -353,8 +370,7 @@ function cartView(ctx) {
       <p class="shop-sub" style="font-size:18px;font-weight:600;margin:18px 0 12px;">Items: ${esc(money(subtotal))}${estimate ? ` · ${esc(estimate.label)} ${esc(money(estimate.shippingCents))} · Total ${esc(money(estimate.totalCents))}` : ""}</p>
       ${count ? `<form id="shop-checkout" class="shop-checkout panel" style="border-radius:18px;">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
-          <h3 style="margin:0;font-size:22px;">Delivery & Errand Checkout</h3>
-          <span style="font-size:13px;padding:3px 10px;background:#fce4ec;color:#ad1457;border-radius:999px;font-weight:600;">🎗️ Lisa's Xpress</span>
+          <h3 style="margin:0;font-size:22px;">Delivery and errand checkout</h3>
         </div>
         ${guest}
         <div class="shop-switch tight" style="margin-bottom:12px;">
@@ -362,64 +378,35 @@ function cartView(ctx) {
           <button class="chip ${mode === "ship" ? "active" : ""}" type="button" data-action="shop-mode" data-mode="ship">Ship it</button>
           <input type="hidden" name="mode" value="${esc(mode)}">
         </div>
-        <p class="empty">Local deliveries cover Lubbock (79401–79499) and Wolfforth (79382). Fresh meals, hot sides, and grocery errand runs stay in town. Spices and dry dog treats can ship nationwide.</p>
-        
+        <p class="empty">${esc(state.locale?.deliveryNote || "Local delivery follows the family's region. Spices and dry dog treats can ship nationwide.")}</p>
         <div class="field"><label>Your Name<input name="name" required value="${esc(draft(state, "name", state.user?.name || ""))}" autocomplete="name" placeholder="Full name"></label></div>
-        <div class="field"><label>Phone Number (for runner text/call)<input name="phone" required value="${esc(draft(state, "phone", ""))}" autocomplete="tel" placeholder="(806) 555-0123"></label></div>
-        <div class="field"><label>Street Address / Drop-off<input name="address" value="${esc(draft(state, "address", ""))}" autocomplete="street-address" placeholder="1234 Main St or Apartment #"></label></div>
+        <div class="field"><label>Phone Number (for runner text/call)<input name="phone" required value="${esc(draft(state, "phone", ""))}" autocomplete="tel" placeholder="Phone number"></label></div>
+        <div class="field"><label>Street Address / Drop-off<input name="address" value="${esc(draft(state, "address", ""))}" autocomplete="street-address" placeholder="Street address"></label></div>
         <div class="split">
-          <div class="field"><label>City<input name="city" value="${esc(draft(state, "city", "Lubbock"))}" autocomplete="address-level2"></label></div>
-          <div class="field"><label>ZIP Code<input name="zip" inputmode="numeric" required value="${esc(draft(state, "zip", "79401"))}" autocomplete="postal-code"></label></div>
+          <div class="field"><label>City<input name="city" value="${esc(draft(state, "city", state.locale?.label || ""))}" autocomplete="address-level2"></label></div>
+          <div class="field"><label>ZIP Code<input name="zip" inputmode="numeric" required value="${esc(draft(state, "zip", ""))}" autocomplete="postal-code"></label></div>
         </div>
-
         <div class="field" style="margin-top:10px;">
-          <label style="font-weight:600;margin-bottom:6px;display:block;">Select Payment Method:</label>
+          <label style="font-weight:600;margin-bottom:6px;display:block;">Payment method</label>
           <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(140px, 1fr));gap:8px;">
-            <label style="display:flex;align-items:center;gap:8px;padding:10px;border:1px solid var(--line);border-radius:10px;background:var(--card);cursor:pointer;">
-              <input type="radio" name="payMethod" value="cashapp" ${payMethod === "cashapp" ? "checked" : ""}>
-              <span><i class="bi bi-currency-dollar" style="color:#00D632;"></i> Cash App ($Yellow9859)</span>
-            </label>
-            <label style="display:flex;align-items:center;gap:8px;padding:10px;border:1px solid var(--line);border-radius:10px;background:var(--card);cursor:pointer;">
-              <input type="radio" name="payMethod" value="square" ${payMethod === "square" ? "checked" : ""}>
-              <span><i class="bi bi-credit-card-2-front" style="color:#202020;"></i> Square Card Form</span>
-            </label>
-            <label style="display:flex;align-items:center;gap:8px;padding:10px;border:1px solid var(--line);border-radius:10px;background:var(--card);cursor:pointer;">
-              <input type="radio" name="payMethod" value="telegram" ${payMethod === "telegram" ? "checked" : ""}>
-              <span><i class="bi bi-telegram" style="color:#0088cc;"></i> Telegram Chat</span>
-            </label>
+            ${payChoices}
           </div>
         </div>
-
-        <div id="square-card-container" style="margin-top:12px;padding:14px;border:1px solid rgba(0,0,0,0.12);border-radius:12px;background:#fafafa;">
-          <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;font-size:13px;font-weight:600;color:#333;">
-            <i class="bi bi-shield-lock-fill" style="color:#2e7d32;"></i> Square Free Payment Processing (Form Ready)
-          </div>
-          <div style="display:grid;gap:8px;">
-            <input type="text" placeholder="Card number (XXXX XXXX XXXX XXXX)" style="background:#fff;border:1px solid #ccc;padding:8px 12px;border-radius:6px;font-size:14px;">
-            <div style="display:flex;gap:8px;">
-              <input type="text" placeholder="MM / YY" style="flex:1;background:#fff;border:1px solid #ccc;padding:8px 12px;border-radius:6px;font-size:14px;">
-              <input type="text" placeholder="CVV" style="width:80px;background:#fff;border:1px solid #ccc;padding:8px 12px;border-radius:6px;font-size:14px;">
-              <input type="text" placeholder="ZIP" style="width:100px;background:#fff;border:1px solid #ccc;padding:8px 12px;border-radius:6px;font-size:14px;">
-            </div>
-          </div>
-          <p style="font-size:11px;color:#666;margin:6px 0 0;">Card processing facilitated by Square. You can also pay seamlessly with Cash App.</p>
-        </div>
-
-        ${needsRunner ? `<div class="field" style="margin-top:12px;"><label>Delivery Runner<select name="runner"><option value="">Assign available runner</option><option ${draft(state, "runner") === "Leroy" ? "selected" : ""}>Leroy</option><option ${draft(state, "runner") === "Rex" ? "selected" : ""}>Rex</option></select></label></div>` : ""}
+        ${squareBox}
+        ${needsRunner ? `<div class="field" style="margin-top:12px;"><label>Delivery Runner<select name="runner"><option value="">Assign available runner</option>${runners.map((name) => `<option ${draft(state, "runner") === name ? "selected" : ""}>${esc(name)}</option>`).join("")}</select></label></div>` : ""}
         ${needsAge ? `<label class="checkline" style="margin-top:8px;"><input type="checkbox" name="ageOk" ${draft(state, "ageOk") ? "checked" : ""}> I am 21 or older. A photo ID will be shown at the door for age-restricted deliveries.</label>` : ""}
-        <div class="field" style="margin-top:10px;"><label>Special Delivery & Errand Notes<textarea name="note" rows="2" placeholder="Gate code, porch directions, item substitutions, or drop-off time preferences.">${esc(draft(state, "note", ""))}</textarea></label></div>
-        
+        <div class="field" style="margin-top:10px;"><label>Special Delivery and Errand Notes<textarea name="note" rows="2" placeholder="Gate code, porch directions, or drop-off notes.">${esc(draft(state, "note", ""))}</textarea></label></div>
         <div class="actions" style="margin-top:16px;">
           <button class="btn quiet" type="button" data-action="shop-estimate">Estimate Delivery</button>
-          <button class="btn moss" type="submit" style="font-size:16px;padding:12px 24px;font-weight:700;">${state.shopSending ? "Placing Order…" : "Place Order & Dispatch"}</button>
+          <button class="btn moss" type="submit" style="font-size:16px;padding:12px 24px;font-weight:700;">${state.shopSending ? "Placing Order…" : "Place Order"}</button>
         </div>
       </form>` : ""}`;
-  return `<nav class="crumbs" aria-label="Breadcrumb"><a href="#/shop">Shop</a><span class="crumb-gap" aria-hidden="true">/</span><span aria-current="page">Cart & Errands</span></nav>
+  const methods = [cash ? "Cash App" : "", square ? "Square" : ""].filter(Boolean).join(" and ") || "the family's payment methods";
+  return `<nav class="crumbs" aria-label="Breadcrumb"><a href="#/shop">Shop</a><span class="crumb-gap" aria-hidden="true">/</span><span aria-current="page">Cart and errands</span></nav>
     <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">
-      <h2 class="page-title" style="margin:0;">Shopping & Errand Cart</h2>
-      <span style="font-size:13px;padding:3px 10px;background:#fce4ec;color:#ad1457;border-radius:999px;font-weight:600;">🎗️ Survivor Kitchen</span>
+      <h2 class="page-title" style="margin:0;">Shopping and errand cart</h2>
     </div>
-    <p>Review items, adjust quantities, select local delivery or shipping, and dispatch your order. Cash App ($Yellow9859), Square, and Telegram ordering ready.</p>
+    <p>Review items, choose local delivery or shipping, and pay with ${esc(methods)}. The menu follows ${esc(state.locale?.chain || "the local")}.</p>
     ${body}`;
 }
 
@@ -566,7 +553,72 @@ export async function shopClick(button, ctx) {
   return false;
 }
 
+function householdForm(state, esc) {
+  const payments = state.payments || {};
+  const cash = (payments.providers || []).find((provider) => provider.id === "cashapp") || {};
+  const square = (payments.providers || []).find((provider) => provider.id === "square") || {};
+  const region = state.locale?.id || "tx";
+  return `<form id="household-setup" class="panel shop-studio">
+    <h3>Family setup</h3>
+    <p class="empty">These settings belong to this family only. A Square access token is saved encrypted and is never shown again.</p>
+    <div class="field"><label>Book name<input name="brandName" value="${esc(state.brand?.name || "")}"></label></div>
+    <div class="field"><label>Short name<input name="shortName" value="${esc(state.brand?.shortName || "")}"></label></div>
+    <div class="field"><label>Home region<select name="homeRegion">
+      <option value="" ${!state.householdHome ? "selected" : ""}>Follow the visitor's location</option>
+      <option value="tx" ${region === "tx" ? "selected" : ""}>Texas, Stripes</option>
+      <option value="va" ${region === "va" ? "selected" : ""}>Virginia, Sheetz</option>
+    </select></label></div>
+    <label class="checkline"><input type="checkbox" name="cashEnabled" ${cash.enabled ? "checked" : ""}> Cash App</label>
+    <div class="field"><label>Cash App cashtag<input name="cashtag" value="${esc(cash.cashtag || "")}" placeholder="YourCashtag"></label></div>
+    <label class="checkline"><input type="checkbox" name="squareEnabled" ${square.enabled ? "checked" : ""}> Square</label>
+    <div class="field"><label>Square application id<input name="applicationId" value="${esc(square.applicationId || "")}"></label></div>
+    <div class="field"><label>Square location id<input name="locationId" value="${esc(square.locationId || "")}"></label></div>
+    <div class="field"><label>Square access token<input name="squareAccessToken" type="password" autocomplete="off" placeholder="${square.tokenSet ? "Saved. Leave blank to keep it." : "Paste a token to save it"}"></label></div>
+    <button class="btn moss" type="submit">Save family setup</button>
+  </form>`;
+}
+
+export async function mountSquare(state) {
+  const provider = (state.payments?.providers || []).find((entry) => entry.id === "square" && entry.enabled && entry.applicationId && entry.locationId);
+  const box = document.getElementById("square-card");
+  if (!provider || !box || box.dataset.ready === "1") return;
+  const src = provider.sandbox ? "https://sandbox.web.squarecdn.com/v1/square.js" : "https://web.squarecdn.com/v1/square.js";
+  if (!window.Square) {
+    await new Promise((resolve, reject) => {
+      const script = document.createElement("script");
+      script.src = src;
+      script.onload = resolve;
+      script.onerror = () => reject(new Error("Square's card form did not load."));
+      document.head.appendChild(script);
+    });
+  }
+  const payments = window.Square.payments(provider.applicationId, provider.locationId);
+  window.squareCard = await payments.card();
+  await window.squareCard.attach("#square-card");
+  box.dataset.ready = "1";
+}
+
 export async function shopSubmit(form, ctx) {
+  if (form.id === "household-setup") {
+    const { state, say, render } = ctx;
+    const data = Object.fromEntries(new FormData(form).entries());
+    const payload = {
+      brand: { name: data.brandName, shortName: data.shortName },
+      homeRegion: data.homeRegion,
+      payments: {
+        cashapp: { enabled: Boolean(form.querySelector("[name=cashEnabled]")?.checked), cashtag: data.cashtag },
+        square: { enabled: Boolean(form.querySelector("[name=squareEnabled]")?.checked), applicationId: data.applicationId, locationId: data.locationId }
+      }
+    };
+    if (data.squareAccessToken) payload.squareAccessToken = data.squareAccessToken;
+    const saved = await ctx.api("/api/household", { method: "PATCH", json: payload });
+    state.brand = saved.household?.brand || state.brand;
+    state.payments = saved.household?.payments || state.payments;
+    state.shopLoaded = false;
+    say("Family setup saved.");
+    render();
+    return true;
+  }
   if (form.id === "shop-checkout") {
     const { state, say, render } = ctx;
     applyLineDetails(state);
@@ -574,6 +626,13 @@ export async function shopSubmit(form, ctx) {
     data.ageOk = Boolean(form.querySelector("[name=ageOk]")?.checked);
     state.shopDraft = data;
     state.shopMode = data.mode || "local";
+    if (data.payMethod === "square" && window.squareCard?.tokenize) {
+      const tokenized = await window.squareCard.tokenize();
+      if (tokenized.status !== "OK" || !tokenized.token) {
+        throw new Error(tokenized.errors?.[0]?.message || "Square could not read that card.");
+      }
+      data.sourceId = tokenized.token;
+    }
     state.shopSending = true;
     render();
     try {

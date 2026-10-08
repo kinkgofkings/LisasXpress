@@ -7,6 +7,11 @@ import {
   placeCall, readThread, searchBook, sendMessage, setCall
 } from "../../server/desk.js";
 import { d1Shop, listProducts, placeOrder, quoteShipping, removeProduct, saveProduct } from "../../server/shop.js";
+import {
+  buildPublicConfig, createHousehold, ensureTenancy, findInvite, householdForUser,
+  isAdmin, loadHousehold, presentHousehold, saveHouseholdSettings, sameFamily
+} from "../../server/tenancy.js";
+import { applyBrandToChannels, detectRegion, quickSignInAllowed, resolveBrand } from "../../shared/white-label.js";
 
 function json(data, status = 200) {
   return Response.json(data, {
@@ -194,7 +199,9 @@ function publicUser(row) {
     email: row.email,
     name: row.name,
     bio: row.bio,
-    avatar: row.avatar_path
+    avatar: row.avatar_path,
+    role: row.role || "member",
+    householdId: row.household_id || "home"
   };
 }
 
@@ -414,9 +421,29 @@ async function uploadMedia(request, env, recipeId, url) {
 let bookReady = null;
 function prepareBook(env) {
   if (!bookReady) {
-    bookReady = env.DB.prepare("ALTER TABLE comments ADD COLUMN attachments TEXT NOT NULL DEFAULT '[]'").run().catch(() => {});
+    bookReady = (async () => {
+      await env.DB.prepare("ALTER TABLE comments ADD COLUMN attachments TEXT NOT NULL DEFAULT '[]'").run().catch(() => {});
+      await ensureTenancy(d1Shop(env.DB), env);
+    })();
   }
   return bookReady;
+}
+
+async function familyContext(request, env, body = {}) {
+  const store = d1Shop(env.DB);
+  const user = await userFrom(env, request);
+  const household = await householdForUser(store, user);
+  const url = new URL(request.url);
+  const region = detectRegion({
+    env,
+    household,
+    cf: request.cf,
+    lat: body.lat ?? url.searchParams.get("lat"),
+    lng: body.lng ?? url.searchParams.get("lng"),
+    zip: body.zip || url.searchParams.get("zip"),
+    requested: body.region || url.searchParams.get("region")
+  });
+  return { store, user, household, region };
 }
 
 function liveDb(env) {
@@ -455,9 +482,17 @@ async function route(request, env, url, parts) {
   const method = request.method;
   const [first, second, third, fourth] = parts;
 
-  if (method === "GET" && first === "health") return json({ ok: true, name: "Lisa's Recipe Book" });
+  if (method === "GET" && first === "health") {
+    const household = await loadHousehold(d1Shop(env.DB), "home");
+    return json({ ok: true, name: resolveBrand(env, household).name });
+  }
+  if (first === "config" && !second && method === "GET") return publicConfig(request, env);
+  if (first === "locale" && !second && (method === "GET" || method === "POST")) return localeConfig(request, env);
+  if (first === "household" && !second && method === "GET") return householdConfig(request, env);
+  if (first === "household" && !second && method === "PATCH") return updateHousehold(request, env);
 
   if (first === "auth" && second === "register" && method === "POST") return register(request, env);
+  if (first === "auth" && second === "quick-lisa" && method === "POST") return quickOwner(request, env);
   if (first === "auth" && second === "login" && method === "POST") return login(request, env);
   if (first === "auth" && second === "me" && method === "GET") return json({ user: publicUser(await userFrom(env, request)) });
   if (first === "auth" && second === "me" && method === "PATCH") return updateProfile(request, env);
@@ -498,7 +533,7 @@ async function route(request, env, url, parts) {
   if (first === "world" && second && !third && method === "GET") return worldOne(request, env, second);
   if (first === "world" && third === "keep" && method === "POST") return worldKeep(request, env, second);
 
-  if (first === "channels" && !second && method === "GET") return json({ channels: VIDEO_CHANNELS });
+  if (first === "channels" && !second && method === "GET") return json({ channels: await brandedChannels(env) });
   if (first === "channels" && second === "sync" && method === "GET") return syncChannels(request, env);
   if (first === "channels" && second === "link-recipe" && method === "POST") return linkChannelRecipe(request, env);
 
@@ -517,28 +552,88 @@ function shopResult(result) {
 }
 
 async function shopApi(request, env, method, second, third) {
-  const store = d1Shop(env.DB);
   const url = new URL(request.url);
   try {
-    if (second === "products" && !third && method === "GET") return json(await listProducts(store, url.searchParams.get("category") || "all"));
+    if (second === "products" && !third && method === "GET") {
+      const ctx = await familyContext(request, env);
+      return json(await listProducts(ctx.store, url.searchParams.get("category") || "all", ctx.region.id, ctx.household?.id || "home"));
+    }
     if (second === "products" && method === "POST" && !third) {
-      if (!await userFrom(env, request)) return json({ error: "Sign in first." }, 401);
-      return shopResult(await saveProduct(store, await readJson(request)));
+      const ctx = await familyContext(request, env);
+      if (!isAdmin(ctx.user)) return json({ error: "Only a family admin can change the shop." }, 403);
+      return shopResult(await saveProduct(ctx.store, await readJson(request), null, ctx.household?.id || "home"));
     }
     if (second === "products" && third && method === "PATCH") {
-      if (!await userFrom(env, request)) return json({ error: "Sign in first." }, 401);
-      return shopResult(await saveProduct(store, await readJson(request), third));
+      const ctx = await familyContext(request, env);
+      if (!isAdmin(ctx.user)) return json({ error: "Only a family admin can change the shop." }, 403);
+      return shopResult(await saveProduct(ctx.store, await readJson(request), third, ctx.household?.id || "home"));
     }
     if (second === "products" && third && method === "DELETE") {
-      if (!await userFrom(env, request)) return json({ error: "Sign in first." }, 401);
-      return json(await removeProduct(store, third));
+      const ctx = await familyContext(request, env);
+      if (!isAdmin(ctx.user)) return json({ error: "Only a family admin can change the shop." }, 403);
+      const removed = await removeProduct(ctx.store, third, ctx.household?.id || "home");
+      return shopResult(removed);
     }
-    if (second === "shipping-estimate" && method === "POST") return shopResult(await quoteShipping(store, await readJson(request)));
-    if (second === "checkout" && method === "POST") return shopResult(await placeOrder(store, await readJson(request), env));
+    if (second === "shipping-estimate" && method === "POST") {
+      const body = await readJson(request);
+      const ctx = await familyContext(request, env, body);
+      return shopResult(await quoteShipping(ctx.store, body, ctx.region));
+    }
+    if (second === "checkout" && method === "POST") {
+      const body = await readJson(request);
+      const ctx = await familyContext(request, env, body);
+      return shopResult(await placeOrder(ctx.store, body, env, {
+        household: ctx.household,
+        region: ctx.region,
+        householdId: ctx.household?.id || "home",
+        brand: resolveBrand(env, ctx.household)
+      }));
+    }
   } catch (error) {
     return json({ error: "The shop hit a snag. Please try again." }, 500);
   }
   return json({ error: "That page is not in the book." }, 404);
+}
+
+async function publicConfig(request, env) {
+  const ctx = await familyContext(request, env);
+  return json(buildPublicConfig(env, ctx.household, ctx.region, ctx.user));
+}
+
+async function localeConfig(request, env) {
+  const body = request.method === "POST" ? await readJson(request) : {};
+  const ctx = await familyContext(request, env, body);
+  return json({ locale: buildPublicConfig(env, ctx.household, ctx.region, ctx.user).locale });
+}
+
+async function householdConfig(request, env) {
+  const user = await userFrom(env, request);
+  if (!user) return json({ error: "Sign in first." }, 401);
+  if (!isAdmin(user)) return json({ error: "Only a family admin can open these settings." }, 403);
+  return json({ household: await presentHousehold(d1Shop(env.DB), env, user.household_id || "home", true) });
+}
+
+async function updateHousehold(request, env) {
+  const user = await userFrom(env, request);
+  if (!user) return json({ error: "Sign in first." }, 401);
+  if (!isAdmin(user)) return json({ error: "Only a family admin can change these settings." }, 403);
+  const result = await saveHouseholdSettings(d1Shop(env.DB), env, user.household_id || "home", await readJson(request));
+  if (result.error) return json({ error: result.error }, result.status || 400);
+  return json(result);
+}
+
+async function brandedChannels(env) {
+  const household = await loadHousehold(d1Shop(env.DB), "home");
+  return applyBrandToChannels(VIDEO_CHANNELS, resolveBrand(env, household));
+}
+
+async function quickOwner(request, env) {
+  const household = await loadHousehold(d1Shop(env.DB), "home");
+  if (!quickSignInAllowed(env, household)) return json({ error: "Quick sign-in is turned off." }, 404);
+  const brand = resolveBrand(env, household);
+  const user = await env.DB.prepare("SELECT * FROM users WHERE email = ?").bind(brand.ownerEmail).first();
+  if (!user || (user.household_id || "home") !== "home") return json({ error: "That quick sign-in is not set up." }, 404);
+  return json({ token: await signToken(env, user.id), user: publicUser(user) });
 }
 
 let deskReady = null;
@@ -603,11 +698,20 @@ async function register(request, env) {
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return json({ error: "That email does not look right." }, 400);
   if (password.length < 8) return json({ error: "Use a password of at least 8 characters." }, 400);
   try {
+    const store = d1Shop(env.DB);
+    const invite = await findInvite(store, body.invite);
+    if (String(body.invite || "").trim() && !invite) return json({ error: "That family invite code was not found." }, 404);
     const result = await env.DB.prepare(`
-      INSERT INTO users (email, password_hash, name, bio, avatar_path, created_at)
-      VALUES (?, ?, ?, '', '', ?)
+      INSERT INTO users (email, password_hash, name, bio, avatar_path, created_at, household_id, role)
+      VALUES (?, ?, ?, '', '', ?, 'home', 'member')
     `).bind(email, await hashPassword(env, password), name, new Date().toISOString()).run();
-    const user = await env.DB.prepare("SELECT * FROM users WHERE id = ?").bind(result.meta.last_row_id).first();
+    const userId = result.meta.last_row_id;
+    if (invite) {
+      await env.DB.prepare("UPDATE users SET household_id = ?, role = 'member' WHERE id = ?").bind(invite.id, userId).run();
+    } else {
+      await createHousehold(store, { name: `${name}'s kitchen`, ownerId: userId });
+    }
+    const user = await env.DB.prepare("SELECT * FROM users WHERE id = ?").bind(userId).first();
     return json({ token: await signToken(env, user.id), user: publicUser(user) }, 201);
   } catch (error) {
     if (String(error.message || error).includes("UNIQUE")) return json({ error: "That email already has a profile." }, 409);
@@ -917,11 +1021,19 @@ async function decorateRecipes(env, user, recipes) {
   }));
 }
 
-async function targetExists(env, type, id) {
+async function targetExists(env, type, id, user) {
   if (type === "recipe") return env.DB.prepare("SELECT id FROM recipes WHERE id = ?").bind(id).first();
-  if (type === "note") return env.DB.prepare("SELECT id FROM notes WHERE id = ?").bind(id).first();
+  if (type === "note") {
+    const note = await env.DB.prepare("SELECT id, household_id FROM notes WHERE id = ?").bind(id).first();
+    if (!note || (user && (note.household_id || "home") !== (user.household_id || "home"))) return null;
+    return note;
+  }
   if (type === "film") return env.DB.prepare("SELECT id FROM library_items WHERE id = ? AND kind NOT IN ('tiktok', 'facebook')").bind(id).first();
-  if (type === "person") return env.DB.prepare("SELECT id FROM users WHERE id = ?").bind(id).first();
+  if (type === "person") {
+    const personRow = await env.DB.prepare("SELECT id, household_id FROM users WHERE id = ?").bind(id).first();
+    if (!personRow || (user && !sameFamily(user, personRow))) return null;
+    return personRow;
+  }
   if (type === "world") {
     const mealId = String(id).replace(/^mealdb-/, "");
     if (!/^\d+$/.test(mealId)) return null;
@@ -938,7 +1050,9 @@ async function targetExists(env, type, id) {
 async function listPeople(request, env) {
   const user = await userFrom(env, request);
   if (!user) return json({ error: "Sign in first." }, 401);
-  const people = await env.DB.prepare("SELECT id, name, bio, avatar_path FROM users ORDER BY name COLLATE NOCASE").all();
+  const people = await env.DB.prepare(
+    "SELECT id, name, bio, avatar_path FROM users WHERE COALESCE(household_id, 'home') = ? ORDER BY name COLLATE NOCASE"
+  ).bind(user.household_id || "home").all();
   const follows = await env.DB.prepare("SELECT follower_id AS followerId, following_id AS followingId FROM follows").all();
   const rows = follows.results || [];
   const listed = people.results || [];
@@ -956,8 +1070,8 @@ async function listPeople(request, env) {
 async function onePerson(request, env, id) {
   const user = await userFrom(env, request);
   if (!user) return json({ error: "Sign in first." }, 401);
-  const row = await env.DB.prepare("SELECT id, name, bio, avatar_path FROM users WHERE id = ?").bind(id).first();
-  if (!row) return json({ error: "That person is not in the book." }, 404);
+  const row = await env.DB.prepare("SELECT id, name, bio, avatar_path, household_id FROM users WHERE id = ?").bind(id).first();
+  if (!row || !sameFamily(user, row)) return json({ error: "That person is not in the book." }, 404);
   const follows = await env.DB.prepare("SELECT follower_id AS followerId, following_id AS followingId FROM follows WHERE following_id = ? OR follower_id = ?").bind(id, user.id).all();
   const rows = follows.results || [];
   const social = await socialFor(env, user, "person", [id]);
@@ -975,8 +1089,8 @@ async function toggleFollow(request, env, id) {
   const user = await userFrom(env, request);
   if (!user) return json({ error: "Sign in first." }, 401);
   if (String(user.id) === String(id)) return json({ error: "That is your own account." }, 400);
-  const other = await env.DB.prepare("SELECT id FROM users WHERE id = ?").bind(id).first();
-  if (!other) return json({ error: "That person is not in the book." }, 404);
+  const other = await env.DB.prepare("SELECT id, household_id FROM users WHERE id = ?").bind(id).first();
+  if (!other || !sameFamily(user, other)) return json({ error: "That person is not in the book." }, 404);
   const existing = await env.DB.prepare("SELECT 1 AS found FROM follows WHERE follower_id = ? AND following_id = ?").bind(user.id, id).first();
   if (existing) {
     await env.DB.prepare("DELETE FROM follows WHERE follower_id = ? AND following_id = ?").bind(user.id, id).run();
@@ -994,7 +1108,7 @@ async function toggleReaction(request, env) {
   const id = String(body.targetId || "");
   const kind = body.kind === "star" ? "star" : "like";
   if (!["recipe", "note", "film", "world", "person"].includes(type) || !id) return json({ error: "That could not be saved." }, 400);
-  if (!await targetExists(env, type, id)) return json({ error: "That could not be found." }, 404);
+  if (!await targetExists(env, type, id, user)) return json({ error: "That could not be found." }, 404);
   const existing = await env.DB.prepare(
     "SELECT 1 AS found FROM reactions WHERE user_id = ? AND target_type = ? AND target_id = ? AND kind = ?"
   ).bind(user.id, type, id, kind).first();
@@ -1038,7 +1152,7 @@ async function addComment(request, env) {
   }
   if (!["recipe", "note", "film", "world"].includes(type) || !id) return json({ error: "That comment could not be saved." }, 400);
   if (!text && !attachments.length) return json({ error: "Write a comment, or add a picture or video." }, 400);
-  if (!await targetExists(env, type, id)) return json({ error: "That could not be found." }, 404);
+  if (!await targetExists(env, type, id, user)) return json({ error: "That could not be found." }, 404);
   const now = new Date().toISOString();
   const result = await env.DB.prepare(
     "INSERT INTO comments (user_id, target_type, target_id, body, attachments, created_at) VALUES (?, ?, ?, ?, ?, ?)"
@@ -1267,8 +1381,9 @@ async function listNotes(request, env) {
     SELECT notes.id, notes.title, notes.body, notes.attachments, notes.updated_at AS updatedAt,
            notes.user_id AS authorId, users.name AS authorName, users.avatar_path AS authorAvatar
     FROM notes LEFT JOIN users ON users.id = notes.user_id
+    WHERE COALESCE(notes.household_id, 'home') = ?
     ORDER BY notes.updated_at DESC
-  `).all();
+  `).bind(user.household_id || "home").all();
   const rows = (notes.results || []).map(publicNote);
   const social = await socialFor(env, user, "note", rows.map((item) => item.id));
   return json({ notes: rows.map((item) => ({ ...item, social: social[String(item.id)] || emptySocial() })) });
@@ -1318,8 +1433,8 @@ async function createNote(request, env) {
   const title = noteTitle(text, attachments);
   const now = new Date().toISOString();
   const result = await env.DB.prepare(
-    "INSERT INTO notes (user_id, title, body, attachments, updated_at) VALUES (?, ?, ?, ?, ?)"
-  ).bind(user.id, title, text, JSON.stringify(attachments), now).run();
+    "INSERT INTO notes (user_id, title, body, attachments, updated_at, household_id) VALUES (?, ?, ?, ?, ?, ?)"
+  ).bind(user.id, title, text, JSON.stringify(attachments), now, user.household_id || "home").run();
   const inserted = await env.DB.prepare("SELECT last_insert_rowid() AS id").first();
   const id = Number(inserted?.id) || Number(result.meta?.last_row_id) || 0;
   return json({
