@@ -177,6 +177,16 @@ const state = {
   recording: null,
   fontSize: localStorage.getItem("lisa-font-size") || "regular",
   activeVideo: null,
+  showVideoUploadModal: false,
+  uploadVideoSource: "file",
+  uploadVideoPreview: null,
+  uploadSelectedFile: null,
+  uploadSelectedExistingVideo: "",
+  uploadYouTubeUrl: "",
+  uploadSetPrimary: false,
+  uploadVideoTitle: "",
+  uploadVideoNotes: "",
+  uploadSelectedRecipe: "",
   videoChannels: JSON.parse(JSON.stringify(DEFAULT_VIDEO_CHANNELS)),
   videoCategory: "all",
   videoLoading: false,
@@ -547,6 +557,7 @@ function shell(main) {
     ${state.activeModalPost ? lightboxModal() : ""}
     ${state.shareDialogPost ? shareDialog() : ""}
     ${state.zoomedImage ? imageZoomModal() : ""}
+    ${state.showVideoUploadModal ? videoUploadModal() : ""}
     ${state.menu ? superMenu() : ""}
     ${state.reader ? reader() : ""}
     ${state.toast ? `<div class="toast">${esc(state.toast)}</div>` : ""}
@@ -1288,6 +1299,9 @@ function recipeView(recipe) {
         </div>
         <div class="actions no-print">
           <button class="btn" data-action="print">Print</button>
+          <button class="btn moss" type="button" data-action="open-video-upload-modal" data-recipe-id="${esc(recipe.id)}" style="font-weight:700;display:inline-flex;align-items:center;gap:6px;">
+            <i class="bi bi-cloud-arrow-up-fill"></i> Upload a Video
+          </button>
           <button class="btn moss" data-action="share" data-title="${esc(shareText)}" data-url="${esc(link)}">Share</button>
           <button class="btn quiet" data-action="copy" data-text="${esc(`${shareText}\n${link}`)}">Copy link</button>
           <button class="btn quiet" data-action="send-link" data-url="${esc(link)}" data-title="${esc(recipe.title)}">Send in a message</button>
@@ -1311,21 +1325,83 @@ function recipeView(recipe) {
           <button class="btn moss" data-action="timer-start">${timer.running ? "Pause" : "Start"}</button>
           <button class="btn quiet" data-action="timer-reset">Reset</button>
         </div>
-        ${youtubeId(recipe.youtube) ? `
-          <div class="recipe-youtube-theater" style="margin:24px 0 20px;background:var(--card);border:2px solid #f48fb1;border-radius:20px;padding:16px;box-shadow:0 8px 24px rgba(216,27,96,0.1);">
-            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px;">
-              <span style="font-size:13px;padding:4px 12px;background:#fce4ec;color:#ad1457;border-radius:999px;font-weight:700;display:inline-flex;align-items:center;gap:6px;">
-                <i class="bi bi-youtube" style="color:#ff0000;font-size:16px;"></i> Step-by-Step Video Tutorial
-              </span>
-              <button type="button" class="btn moss" data-action="popout-recipe-video" data-youtube="${esc(recipe.youtube)}" data-title="${esc(recipe.title)}" style="font-size:13px;padding:6px 14px;font-weight:700;display:inline-flex;align-items:center;gap:6px;">
-                <i class="bi bi-arrows-fullscreen"></i> Pop Out Theater Player
-              </button>
+        ${(() => {
+          const yt = youtubeId(recipe.youtube);
+          const vids = (recipe.media || []).filter(m => m.kind === "video");
+          if (yt) {
+            return `
+              <div class="recipe-youtube-theater" style="margin:24px 0 20px;background:var(--card);border:2px solid #f48fb1;border-radius:20px;padding:16px;box-shadow:0 8px 24px rgba(216,27,96,0.1);">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px;">
+                  <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                    <span style="font-size:13px;padding:4px 12px;background:#fce4ec;color:#ad1457;border-radius:999px;font-weight:700;display:inline-flex;align-items:center;gap:6px;">
+                      <i class="bi bi-youtube" style="color:#ff0000;font-size:16px;"></i> Official YouTube Video Tutorial
+                    </span>
+                    ${vids.length ? `<span style="font-size:11px;padding:2px 8px;background:var(--sand);color:var(--muted);border-radius:999px;font-weight:700;">+${vids.length} extra clip${vids.length > 1 ? 's' : ''}</span>` : ""}
+                  </div>
+                  <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                    <button type="button" class="btn moss" data-action="popout-recipe-video" data-youtube="${esc(recipe.youtube)}" data-title="${esc(recipe.title)}" style="font-size:13px;padding:6px 14px;font-weight:700;display:inline-flex;align-items:center;gap:6px;">
+                      <i class="bi bi-arrows-fullscreen"></i> Pop Out Theater Player
+                    </button>
+                    <button type="button" class="btn quiet" data-action="open-video-upload-modal" data-recipe-id="${esc(recipe.id)}" style="font-size:13px;padding:6px 12px;font-weight:700;display:inline-flex;align-items:center;gap:6px;">
+                      <i class="bi bi-cloud-arrow-up-fill"></i> Upload Additional Video
+                    </button>
+                  </div>
+                </div>
+                <div class="watch" style="border-radius:14px;overflow:hidden;box-shadow:0 4px 16px rgba(0,0,0,0.15);">
+                  <iframe src="https://www.youtube.com/embed/${esc(yt)}?enablejsapi=1&rel=0&playsinline=1" title="${esc(recipe.title)}" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowfullscreen></iframe>
+                </div>
+              </div>
+            `;
+          }
+          if (vids.length > 0) {
+            const firstVid = vids[0];
+            return `
+              <div class="recipe-youtube-theater" style="margin:24px 0 20px;background:var(--card);border:2px solid #f48fb1;border-radius:20px;padding:16px;box-shadow:0 8px 24px rgba(216,27,96,0.1);">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px;">
+                  <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                    <span style="font-size:13px;padding:4px 12px;background:#fce4ec;color:#ad1457;border-radius:999px;font-weight:700;display:inline-flex;align-items:center;gap:6px;">
+                      <i class="bi bi-camera-video-fill" style="color:#d81b60;font-size:16px;"></i> Kitchen Video Tutorial
+                    </span>
+                    <span style="font-size:11px;padding:2px 8px;background:#c8e6c9;color:#1b5e20;border-radius:999px;font-weight:700;">Uploaded Video</span>
+                    ${vids.length > 1 ? `<span style="font-size:11px;padding:2px 8px;background:var(--sand);color:var(--muted);border-radius:999px;font-weight:700;">+${vids.length - 1} more clip${vids.length > 2 ? 's' : ''}</span>` : ""}
+                  </div>
+                  <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                    <button type="button" class="btn moss" data-action="popout-recipe-media" data-id="${esc(firstVid.id)}" data-kind="video" data-path="${esc(firstVid.path)}" data-caption="${esc(firstVid.caption || recipe.title)}" style="font-size:13px;padding:6px 14px;font-weight:700;display:inline-flex;align-items:center;gap:6px;">
+                      <i class="bi bi-arrows-fullscreen"></i> Pop Out Theater Player
+                    </button>
+                    <button type="button" class="btn quiet" data-action="open-video-upload-modal" data-recipe-id="${esc(recipe.id)}" style="font-size:13px;padding:6px 12px;font-weight:700;display:inline-flex;align-items:center;gap:6px;">
+                      <i class="bi bi-cloud-arrow-up-fill"></i> Upload Additional Video
+                    </button>
+                  </div>
+                </div>
+                <div class="watch" style="border-radius:14px;overflow:hidden;box-shadow:0 4px 16px rgba(0,0,0,0.15);aspect-ratio:16/9;background:#000;">
+                  <video controls playsinline style="width:100%;height:100%;object-fit:contain;background:#000;" src="${esc(asset(firstVid.path))}"></video>
+                </div>
+              </div>
+            `;
+          }
+          return `
+            <div class="recipe-add-video-prompt" style="margin:20px 0;padding:16px 20px;background:linear-gradient(135deg, #fff0f5 0%, #ffebee 100%);border:1.5px dashed #f48fb1;border-radius:18px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;">
+              <div style="display:flex;align-items:center;gap:12px;">
+                <div style="width:44px;height:44px;border-radius:14px;background:#fce4ec;display:flex;align-items:center;justify-content:center;color:#d81b60;font-size:22px;box-shadow:0 4px 12px rgba(216,27,96,0.15);">
+                  <i class="bi bi-camera-reels-fill"></i>
+                </div>
+                <div>
+                  <strong style="color:#880e4f;font-size:15px;display:block;">Cook with Lisa on Video</strong>
+                  <span style="font-size:13px;color:#6d4c5d;">Have a cooking video or want to record one? Upload a video file or link YouTube to this recipe!</span>
+                </div>
+              </div>
+              <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                <button type="button" class="btn moss" data-action="open-video-upload-modal" data-recipe-id="${esc(recipe.id)}" data-source="file" style="font-weight:700;display:inline-flex;align-items:center;gap:6px;font-size:13px;padding:8px 16px;">
+                  <i class="bi bi-cloud-arrow-up-fill"></i> Upload Video
+                </button>
+                <button type="button" class="btn quiet" data-action="open-video-upload-modal" data-recipe-id="${esc(recipe.id)}" data-source="youtube" style="font-size:13px;padding:8px 14px;font-weight:600;">
+                  <i class="bi bi-youtube" style="color:#ff0000;"></i> Link YouTube
+                </button>
+              </div>
             </div>
-            <div class="watch" style="border-radius:14px;overflow:hidden;box-shadow:0 4px 16px rgba(0,0,0,0.15);">
-              <iframe src="https://www.youtube.com/embed/${esc(youtubeId(recipe.youtube))}?enablejsapi=1&rel=0&playsinline=1" title="${esc(recipe.title)}" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowfullscreen></iframe>
-            </div>
-          </div>
-        ` : ""}
+          `;
+        })()}
         ${reactBar(reactionTarget(recipe).type, reactionTarget(recipe).id, recipe.social)}
         ${commentsBlock(reactionTarget(recipe).type, reactionTarget(recipe).id, recipe.social)}
         <div class="recipe-cart-card" style="margin:20px 0;padding:16px 20px;background:linear-gradient(135deg, #fff0f5, #ffe4ec);border:1.5px solid #f48fb1;border-radius:18px;display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:12px;box-shadow:0 6px 20px rgba(216,27,96,0.08);">
@@ -1374,6 +1450,17 @@ function editor(recipe) {
       <div class="field"><label>Ingredients, one per line<textarea name="ingredients" required>${esc(value.ingredients.join("\n"))}</textarea></label></div>
       <div class="field"><label>Steps, one per line<textarea name="steps" required>${esc(value.steps.join("\n"))}</textarea></label></div>
       <div class="field"><label>Kitchen notes<textarea name="notes">${esc(value.notes)}</textarea></label></div>
+      <div class="field">
+        <label style="font-weight:700;">Step-by-Step Cooking Video (YouTube link or uploaded video)
+          <div style="display:flex;gap:8px;margin-top:4px;flex-wrap:wrap;">
+            <input name="youtube" value="${esc(value.youtube || '')}" placeholder="https://www.youtube.com/watch?v=..." style="flex:1;min-width:240px;">
+            <button type="button" class="btn quiet" data-action="open-video-upload-modal" data-recipe-id="${esc(value.id || '')}" style="font-weight:700;display:inline-flex;align-items:center;gap:6px;">
+              <i class="bi bi-cloud-arrow-up-fill"></i> Upload Video File
+            </button>
+          </div>
+        </label>
+        <p style="margin:4px 0 0;font-size:12px;color:var(--muted);">Paste a YouTube link or tap Upload Video to attach a video directly.</p>
+      </div>
       <div class="split">
         <div class="field"><label>Source title<input name="sourceTitle" value="${esc(value.sourceTitle)}"></label></div>
         <div class="field"><label>Source link<input name="sourceUrl" value="${esc(value.sourceUrl)}" placeholder="https://"></label></div>
@@ -2298,6 +2385,240 @@ function videoModal() {
   `;
 }
 
+function videoUploadModal() {
+  const chosenRecipe = state.uploadSelectedRecipe ? state.recipes.find(r => r.id === state.uploadSelectedRecipe) : null;
+  const source = state.uploadVideoSource || "file";
+
+  // Check if chosen recipe already has any videos
+  const existingVideos = [];
+  if (chosenRecipe?.youtube) {
+    existingVideos.push({
+      kind: "youtube",
+      title: "Official YouTube Tutorial",
+      url: chosenRecipe.youtube
+    });
+  }
+  if (Array.isArray(chosenRecipe?.media)) {
+    for (const m of chosenRecipe.media) {
+      if (m.kind === "video") {
+        existingVideos.push({
+          kind: "video",
+          title: m.caption || "Kitchen Video Clip",
+          url: m.path
+        });
+      }
+    }
+  }
+
+  // Collect all available videos in Lisa's Studio and library
+  const availableStudioVideos = [];
+  for (const ch of (state.videoChannels || [])) {
+    for (const v of (ch.videos || [])) {
+      const link = v.url || v.filePath || v.youtube;
+      if (link && !availableStudioVideos.some(x => x.url === link)) {
+        availableStudioVideos.push({
+          id: v.id,
+          title: v.title,
+          channel: ch.name || "Lisa's Kitchen Studio",
+          url: link,
+          youtube: v.youtube || (link.includes("youtube") ? link : ""),
+          thumbnail: v.thumbnail || ""
+        });
+      }
+    }
+  }
+  for (const item of (state.library || [])) {
+    if ((item.kind === "film" || item.kind === "youtube") && item.url) {
+      if (!availableStudioVideos.some(x => x.url === item.url)) {
+        availableStudioVideos.push({
+          id: `lib-${item.id}`,
+          title: item.title,
+          channel: "Saved Library Item",
+          url: item.url,
+          youtube: item.kind === "youtube" ? item.url : "",
+          thumbnail: item.thumbnail || ""
+        });
+      }
+    }
+  }
+
+  const generatedTitle = state.uploadVideoTitle || (chosenRecipe ? `Lisa's ${chosenRecipe.title} Tutorial` : "Lisa's Homestyle Cooking Video");
+
+  return `
+    <div class="scrim" data-action="close-video-upload-modal" style="z-index:900;"></div>
+    <div class="video-modal-dialog" role="dialog" aria-modal="true" style="position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);width:min(95vw, 700px);max-height:92vh;overflow-y:auto;background:var(--card);border:2px solid #f48fb1;border-radius:24px;padding:22px;z-index:910;box-shadow:0 24px 70px rgba(0,0,0,0.45);">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px;">
+        <div style="display:flex;align-items:center;gap:8px;">
+          <span style="font-size:12px;padding:4px 12px;background:#fce4ec;color:#ad1457;border-radius:999px;font-weight:700;display:inline-flex;align-items:center;gap:6px;">
+            <i class="bi bi-camera-reels-fill"></i> Lisa's Video Studio
+          </span>
+          <h3 style="font-family:var(--serif);font-size:22px;margin:0;color:var(--ink);">Add or Upload Cooking Video</h3>
+        </div>
+        <button class="btn quiet" type="button" data-action="close-video-upload-modal" style="padding:6px 14px;"><i class="bi bi-x-lg"></i></button>
+      </div>
+
+      <p style="font-size:14px;color:var(--muted);margin:0 0 14px;line-height:1.5;">
+        Upload a pre-recorded video file from your phone or computer, select a video already in the Studio, or link directly from YouTube.
+      </p>
+
+      <!-- Recipe Selector -->
+      <div class="field" style="margin-bottom:12px;">
+        <label style="font-weight:700;font-size:14px;display:block;margin-bottom:4px;">
+          Select Recipe to Connect:
+          <select name="recipeId" id="upload-modal-recipe" data-action="upload-recipe-change" style="margin-top:4px;width:100%;font-size:14px;padding:8px 12px;">
+            <option value="">No recipe attached (Standalone Studio video)</option>
+            ${state.recipes.map(r => `<option value="${esc(r.id)}" ${state.uploadSelectedRecipe === r.id ? 'selected' : ''}>${esc(r.title)}</option>`).join("")}
+          </select>
+        </label>
+      </div>
+
+      <!-- Incase one is already available banner -->
+      ${existingVideos.length > 0 ? `
+        <div style="background:#f1f8e9;border:1.5px solid #81c784;border-radius:14px;padding:12px 14px;margin-bottom:14px;">
+          <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:6px;">
+            <span style="font-weight:700;color:#2e7d32;font-size:13px;display:inline-flex;align-items:center;gap:6px;">
+              <i class="bi bi-check-circle-fill"></i> Video already available for ${esc(chosenRecipe?.title)} (${existingVideos.length})
+            </span>
+            <span style="font-size:11px;background:#c8e6c9;color:#1b5e20;padding:2px 8px;border-radius:999px;font-weight:700;">Active in Book</span>
+          </div>
+          <p style="font-size:12px;color:#33691e;margin:4px 0 0;line-height:1.4;">
+            This recipe already has <strong>${esc(existingVideos[0].title)}</strong> attached. You can add an extra video clip (alternate angle, seasoning tip) or set your new video as the primary tutorial.
+          </p>
+        </div>
+      ` : ""}
+
+      <!-- Source Chooser Tabs -->
+      <div style="margin-bottom:14px;">
+        <label style="font-weight:700;font-size:13px;color:var(--ink);display:block;margin-bottom:6px;">Choose Video Source:</label>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(170px, 1fr));gap:8px;">
+          <button type="button" class="btn ${source === 'file' ? 'moss' : 'quiet'}" data-action="set-upload-source" data-source="file" style="font-weight:700;font-size:13px;padding:8px 10px;justify-content:center;">
+            <i class="bi bi-cloud-arrow-up-fill"></i> 1. Upload Video File
+          </button>
+          <button type="button" class="btn ${source === 'existing' ? 'moss' : 'quiet'}" data-action="set-upload-source" data-source="existing" style="font-weight:700;font-size:13px;padding:8px 10px;justify-content:center;">
+            <i class="bi bi-collection-play-fill"></i> 2. Pick Studio Video
+          </button>
+          <button type="button" class="btn ${source === 'youtube' ? 'moss' : 'quiet'}" data-action="set-upload-source" data-source="youtube" style="font-weight:700;font-size:13px;padding:8px 10px;justify-content:center;">
+            <i class="bi bi-youtube" style="${source === 'youtube' ? '' : 'color:#ff0000;'}"></i> 3. Link YouTube URL
+          </button>
+        </div>
+      </div>
+
+      <form id="upload-video-form" class="stack" style="gap:14px;">
+        <input type="hidden" name="source" value="${esc(source)}">
+        <input type="hidden" name="recipeId" value="${esc(state.uploadSelectedRecipe || '')}">
+
+        <!-- SOURCE 1: FILE UPLOAD -->
+        ${source === 'file' ? `
+          <div class="field" style="background:#fafafa;padding:14px;border-radius:14px;border:1px solid var(--line);">
+            <label style="font-weight:700;font-size:13px;display:block;margin-bottom:6px;">
+              Choose Video File (MP4, WebM, MOV):
+              <input type="file" id="upload-modal-file" name="file" accept="video/mp4,video/webm,video/quicktime,video/*" data-action="pick-upload-file" ${!state.uploadSelectedFile ? 'required' : ''} style="margin-top:6px;width:100%;padding:10px;border:2px dashed #f48fb1;border-radius:12px;background:#fff8fa;cursor:pointer;">
+            </label>
+            <div id="upload-preview-container" style="${state.uploadVideoPreview ? 'display:block;' : 'display:none;'}margin-top:10px;border-radius:16px;overflow:hidden;background:#000;aspect-ratio:16/9;box-shadow:0 6px 18px rgba(0,0,0,0.2);">
+              <video id="upload-preview-player" controls playsinline style="width:100%;height:100%;object-fit:contain;" src="${esc(state.uploadVideoPreview || '')}"></video>
+            </div>
+            ${state.uploadSelectedFile ? `<p style="font-size:12px;color:var(--moss);font-weight:600;margin:6px 0 0;"><i class="bi bi-file-earmark-play-fill"></i> Selected: ${esc(state.uploadSelectedFile.name)} (${(state.uploadSelectedFile.size / (1024 * 1024)).toFixed(1)} MB)</p>` : ""}
+          </div>
+        ` : ""}
+
+        <!-- SOURCE 2: PICK FROM STUDIO/LIBRARY -->
+        ${source === 'existing' ? `
+          <div class="field" style="background:#fafafa;padding:14px;border-radius:14px;border:1px solid var(--line);">
+            <label style="font-weight:700;font-size:13px;display:block;margin-bottom:6px;">
+              Select Video Already in Studio or Library:
+              <select name="existingVideoUrl" id="upload-modal-existing" data-action="upload-existing-change" style="margin-top:6px;width:100%;font-size:14px;padding:8px 12px;" required>
+                <option value="">-- Choose an available video --</option>
+                ${availableStudioVideos.map(v => `
+                  <option value="${esc(v.url)}" ${state.uploadSelectedExistingVideo === v.url ? 'selected' : ''}>
+                    ${esc(v.title)} (${esc(v.channel)})
+                  </option>
+                `).join("")}
+              </select>
+            </label>
+            ${state.uploadVideoPreview ? `
+              <div style="margin-top:10px;border-radius:16px;overflow:hidden;background:#000;aspect-ratio:16/9;box-shadow:0 6px 18px rgba(0,0,0,0.2);">
+                ${youtubeId(state.uploadVideoPreview) ? `
+                  <iframe style="width:100%;height:100%;border:0;" src="https://www.youtube.com/embed/${esc(youtubeId(state.uploadVideoPreview))}?rel=0" allowfullscreen></iframe>
+                ` : `
+                  <video controls playsinline style="width:100%;height:100%;object-fit:contain;" src="${esc(asset(state.uploadVideoPreview))}"></video>
+                `}
+              </div>
+            ` : ""}
+          </div>
+        ` : ""}
+
+        <!-- SOURCE 3: YOUTUBE LINK -->
+        ${source === 'youtube' ? `
+          <div class="field" style="background:#fafafa;padding:14px;border-radius:14px;border:1px solid var(--line);">
+            <label style="font-weight:700;font-size:13px;display:block;margin-bottom:6px;">
+              YouTube Video Link:
+              <input type="url" name="youtubeUrl" id="upload-modal-youtube-url" data-action="upload-youtube-input" placeholder="https://www.youtube.com/watch?v=_TwRwMX_pz0 or https://youtu.be/..." value="${esc(state.uploadYouTubeUrl || chosenRecipe?.youtube || '')}" style="margin-top:6px;width:100%;" required>
+            </label>
+            <p style="margin:4px 0 0;font-size:12px;color:var(--muted);">Paste any video, Short, or live stream link from YouTube.</p>
+          </div>
+        ` : ""}
+
+        <!-- Video Title Input -->
+        <div class="field">
+          <label style="font-weight:700;font-size:14px;display:block;margin-bottom:4px;">Video Title:
+            <input name="title" id="upload-modal-title" required placeholder="e.g. Grandma's Gumbo Tutorial" value="${esc(generatedTitle)}" style="margin-top:4px;width:100%;">
+          </label>
+        </div>
+
+        <!-- Video Notes Input -->
+        <div class="field">
+          <label style="font-weight:700;font-size:14px;display:block;margin-bottom:4px;">Notes & Creator Tips:
+            <textarea name="notes" id="upload-modal-notes" rows="2" placeholder="Tell viewers what to watch for, temperature tips, or secret seasonings." style="margin-top:4px;width:100%;">${esc(state.uploadVideoNotes || '')}</textarea>
+          </label>
+        </div>
+
+        ${existingVideos.length > 0 ? `
+          <div style="display:flex;align-items:center;gap:8px;padding:8px 12px;background:#fff8fa;border:1px solid #f8bbd0;border-radius:10px;">
+            <input type="checkbox" id="upload-modal-set-primary" name="setPrimary" ${state.uploadSetPrimary ? 'checked' : ''} style="width:18px;height:18px;accent-color:#d81b60;">
+            <label for="upload-modal-set-primary" style="font-size:13px;font-weight:600;color:#880e4f;cursor:pointer;">
+              Make this the main featured tutorial video for this recipe (replaces current primary video)
+            </label>
+          </div>
+        ` : ""}
+
+        <!-- YouTube Channel Carry-Over Section -->
+        <div style="background:linear-gradient(135deg, #fff0f5 0%, #ffebee 100%);border:1.5px solid #f48fb1;border-radius:16px;padding:14px 16px;margin:2px 0;">
+          <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:6px;">
+            <strong style="color:#c2185b;font-size:14px;display:flex;align-items:center;gap:6px;">
+              <i class="bi bi-youtube" style="color:#ff0000;font-size:18px;"></i> Carry Over to @LisasKitchenStudio on YouTube
+            </strong>
+            <span style="font-size:11px;background:#fce4ec;color:#ad1457;padding:2px 8px;border-radius:999px;font-weight:700;">1-Click Kit</span>
+          </div>
+          <p style="font-size:12px;color:#6d4c5d;margin:0 0 10px;line-height:1.5;">
+            To publish this video on your YouTube channel, launch YouTube Studio below and use our pre-formatted title, description, ingredients, and recipe link:
+          </p>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px;">
+            <button type="button" class="btn quiet" data-action="copy-youtube-kit" style="font-size:12px;padding:6px 12px;font-weight:700;">
+              <i class="bi bi-clipboard-check"></i> Copy Title & Description for YouTube
+            </button>
+            <a class="btn quiet" href="https://studio.youtube.com/channel/UCOQlqCabDLlzQEzlcHfvXzg/videos/upload" target="_blank" rel="noopener" style="font-size:12px;padding:6px 12px;font-weight:700;">
+              <i class="bi bi-box-arrow-up-right"></i> Open YouTube Studio Uploader
+            </a>
+          </div>
+          <div class="field" style="margin:0;">
+            <label style="font-size:12px;color:#880e4f;font-weight:600;display:block;">
+              YouTube URL after publishing (optional):
+              <input type="url" name="youtubeCarryOverUrl" id="upload-modal-carryover-url" placeholder="https://www.youtube.com/watch?v=... (paste after uploading to YouTube)" style="margin-top:3px;width:100%;font-size:12px;padding:6px 10px;">
+            </label>
+          </div>
+        </div>
+
+        <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:4px;">
+          <button class="btn quiet" type="button" data-action="close-video-upload-modal">Cancel</button>
+          <button class="btn moss" type="submit" id="upload-modal-submit" style="font-weight:700;padding:10px 20px;font-size:15px;">
+            <i class="bi bi-cloud-arrow-up-fill"></i> Save Video to Lisa's Kitchen Studio
+          </button>
+        </div>
+      </form>
+    </div>
+  `;
+}
+
 function studio() {
   if (!state.videoChannels?.length && !state.videoLoading) {
     loadChannels();
@@ -2353,6 +2674,9 @@ function studio() {
           </a>
           <button type="button" class="btn quiet" data-action="sync-youtube-feed" style="font-weight:600;display:inline-flex;align-items:center;gap:6px;">
             <i class="bi bi-arrow-repeat"></i> Sync Channel
+          </button>
+          <button type="button" class="btn quiet" data-action="open-video-upload-modal" style="font-weight:600;display:inline-flex;align-items:center;gap:6px;">
+            <i class="bi bi-cloud-arrow-up-fill"></i> Upload a Video
           </button>
           <button type="button" class="btn quiet" data-action="camera-open" style="font-weight:600;display:inline-flex;align-items:center;gap:6px;">
             <i class="bi bi-camera-video"></i> Record a Video
@@ -2414,10 +2738,15 @@ function studio() {
 
     <!-- Mom's Teleprompter & Recording Studio -->
     <div style="margin-top:40px;padding-top:24px;border-top:2px dashed var(--line);">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:12px;">
         <div>
           <h3 style="font-family:var(--serif);font-size:24px;margin:0 0 4px;color:var(--ink);">Mom's Kitchen Recording Studio</h3>
-          <p style="margin:0;font-size:14px;color:var(--muted);">Record a cooking video, read recipe steps on the teleprompter cue card, or link an external YouTube video.</p>
+          <p style="margin:0;font-size:14px;color:var(--muted);">Record a cooking video, read recipe steps on the teleprompter cue card, upload a video file, or link an external YouTube video.</p>
+        </div>
+        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+          <button type="button" class="btn moss" data-action="open-video-upload-modal" style="font-weight:700;display:inline-flex;align-items:center;gap:6px;font-size:13px;padding:8px 16px;">
+            <i class="bi bi-cloud-arrow-up-fill"></i> Upload Video File
+          </button>
         </div>
       </div>
 
@@ -2964,6 +3293,64 @@ document.addEventListener("click", async (event) => {
       render();
       return;
     }
+    if (action === "open-video-upload-modal") {
+      event.preventDefault();
+      const recId = button.dataset.recipeId;
+      if (recId) {
+        state.uploadSelectedRecipe = recId;
+        const rec = state.recipes.find(r => r.id === recId);
+        if (rec) state.uploadVideoTitle = `Lisa's ${rec.title} Tutorial`;
+      }
+      if (button.dataset.source) {
+        state.uploadVideoSource = button.dataset.source;
+      }
+      state.showVideoUploadModal = true;
+      render();
+      return;
+    }
+    if (action === "set-upload-source") {
+      event.preventDefault();
+      state.uploadVideoSource = button.dataset.source || "file";
+      render();
+      return;
+    }
+    if (action === "close-video-upload-modal") {
+      event.preventDefault();
+      state.showVideoUploadModal = false;
+      state.uploadVideoPreview = null;
+      render();
+      return;
+    }
+    if (action === "copy-youtube-kit") {
+      event.preventDefault();
+      const recId = document.getElementById("upload-modal-recipe")?.value || state.uploadSelectedRecipe;
+      const title = document.getElementById("upload-modal-title")?.value || (recId ? state.recipes.find(r => r.id === recId)?.title : "Lisa's Cooking Video");
+      const notes = document.getElementById("upload-modal-notes")?.value || "";
+      const rec = state.recipes.find(r => r.id === recId);
+
+      let kit = `${title} | Lisa's Kitchen Studio\n\n`;
+      if (notes) kit += `${notes}\n\n`;
+      if (rec) {
+        kit += `INGREDIENTS:\n${(rec.ingredients || []).map(i => `- ${i}`).join("\n")}\n\n`;
+        kit += `INSTRUCTIONS:\n${(rec.steps || []).map((s, idx) => `${idx + 1}. ${s}`).join("\n")}\n\n`;
+        kit += `Servings: ${rec.yieldText || "Family"}\n`;
+        if (rec.prepMinutes) kit += `Prep time: ${rec.prepMinutes} mins | `;
+        if (rec.cookMinutes) kit += `Cook time: ${rec.cookMinutes} mins\n\n`;
+      }
+      kit += `Full Printable Recipe in Lisa's Kitchen Book:\nhttps://lisa.synthetix-labz.cloud\n\n`;
+      kit += `#LisasKitchenStudio #HomestyleCooking #SurvivorKitchen #TexasCooking #CajunCooking #FamilyRecipes`;
+
+      if (navigator.clipboard?.writeText) {
+        navigator.clipboard.writeText(kit).then(() => {
+          say("Copied Title, Description, Ingredients & Tags to clipboard! Ready to paste into YouTube Studio. 📋");
+        }).catch(() => {
+          say("Title & Description ready in box.");
+        });
+      } else {
+        say("Title & Description ready in box.");
+      }
+      return;
+    }
     if (action === "toggle-theater-fullscreen") {
       event.preventDefault();
       const dlg = document.querySelector(".video-modal-dialog");
@@ -3351,6 +3738,15 @@ document.addEventListener("input", (event) => {
   }
   if (event.target.id === "note-body") state.noteDraft = event.target.value;
   if (event.target.closest?.("#film-form")) rememberFilm();
+  if (event.target.id === "upload-modal-youtube-url") {
+    state.uploadYouTubeUrl = event.target.value.trim();
+  }
+  if (event.target.id === "upload-modal-title") {
+    state.uploadVideoTitle = event.target.value;
+  }
+  if (event.target.id === "upload-modal-notes") {
+    state.uploadVideoNotes = event.target.value;
+  }
   if (event.target.id === "shelf-q") {
     state.shelfQ = event.target.value;
     state.shelfFocus = true;
@@ -3362,6 +3758,46 @@ document.addEventListener("input", (event) => {
 
 document.addEventListener("change", async (event) => {
   const input = event.target;
+  if (input instanceof HTMLInputElement && input.dataset.action === "pick-upload-file") {
+    const file = input.files?.[0];
+    if (file) {
+      state.uploadSelectedFile = file;
+      state.uploadVideoPreview = URL.createObjectURL(file);
+      const titleInput = document.getElementById("upload-modal-title");
+      if (titleInput && !titleInput.value) {
+        const cleanName = file.name.replace(/\.[^/.]+$/, "").replace(/[-_]/g, " ");
+        state.uploadVideoTitle = cleanName.charAt(0).toUpperCase() + cleanName.slice(1);
+      }
+      render();
+    }
+    return;
+  }
+  if (input instanceof HTMLSelectElement && input.dataset.action === "upload-recipe-change") {
+    state.uploadSelectedRecipe = input.value;
+    const rec = state.recipes.find(r => r.id === input.value);
+    if (rec) {
+      state.uploadVideoTitle = `Lisa's ${rec.title} Tutorial`;
+    }
+    render();
+    return;
+  }
+  if (input instanceof HTMLSelectElement && input.dataset.action === "upload-existing-change") {
+    state.uploadSelectedExistingVideo = input.value;
+    state.uploadVideoPreview = input.value;
+    for (const ch of (state.videoChannels || [])) {
+      const match = (ch.videos || []).find(v => v.url === input.value || v.filePath === input.value || v.youtube === input.value);
+      if (match) {
+        state.uploadVideoTitle = match.title;
+        break;
+      }
+    }
+    render();
+    return;
+  }
+  if (input instanceof HTMLInputElement && input.id === "upload-modal-set-primary") {
+    state.uploadSetPrimary = input.checked;
+    return;
+  }
   if (input instanceof HTMLSelectElement && input.dataset.action === "pick-link-recipe") {
     const recipeId = input.value;
     const recipe = state.recipes.find(r => r.id === recipeId);
@@ -3656,6 +4092,121 @@ document.addEventListener("submit", async (event) => {
       } catch {}
 
       say(recipeId ? "Video linked to recipe and added to Lisa's Studio! 🎬" : "Video added to Lisa's Kitchen Studio! 🎬");
+      render();
+    }
+    if (form.id === "upload-video-form") {
+      const source = data.source || state.uploadVideoSource || "file";
+      const title = String(data.title || "").trim() || "Lisa's Cooking Video";
+      const recipeId = String(data.recipeId || state.uploadSelectedRecipe || "").trim();
+      const notes = String(data.notes || "").trim();
+      const carryOverYt = String(data.youtubeCarryOverUrl || "").trim();
+      const setPrimary = Boolean(data.setPrimary);
+
+      const button = form.querySelector("[type=submit]");
+      if (button) {
+        button.disabled = true;
+        button.textContent = "Saving Video…";
+      }
+
+      let filePath = "";
+      let isYt = false;
+      let finalYt = carryOverYt;
+
+      if (source === "file") {
+        const fileInput = document.getElementById("upload-modal-file");
+        const file = fileInput?.files?.[0] || state.uploadSelectedFile;
+        if (!file || !file.size) throw new Error("Please choose a video file first.");
+        try {
+          const uploaded = await uploadFileFast(file, file.name);
+          filePath = uploaded?.path || "";
+        } catch (err) {
+          console.warn("Upload fallback to local object URL:", err);
+        }
+        if (!filePath) {
+          filePath = URL.createObjectURL(file);
+        }
+      } else if (source === "existing") {
+        const existingUrl = data.existingVideoUrl || state.uploadSelectedExistingVideo;
+        if (!existingUrl) throw new Error("Please select an existing video from the list.");
+        filePath = existingUrl;
+        if (youtubeId(existingUrl)) {
+          isYt = true;
+          finalYt = existingUrl;
+        }
+      } else if (source === "youtube") {
+        const ytInputUrl = data.youtubeUrl || state.uploadYouTubeUrl;
+        if (!ytInputUrl || !youtubeId(ytInputUrl)) throw new Error("Please enter a valid YouTube video URL.");
+        filePath = ytInputUrl;
+        isYt = true;
+        finalYt = ytInputUrl;
+      }
+
+      const ytId = youtubeId(finalYt || filePath);
+      const newVid = {
+        id: `lisa-${ytId || Date.now()}`,
+        title,
+        channel: "Lisa's Kitchen Studio",
+        duration: (isYt || ytId) ? "YouTube Tutorial" : "Uploaded Video",
+        url: filePath,
+        filePath,
+        youtube: (isYt || ytId) ? (finalYt || filePath) : (carryOverYt || ""),
+        thumbnail: ytId ? `https://img.youtube.com/vi/${ytId}/hqdefault.jpg` : "/images/garden-to-table.jpg",
+        category: "cooking",
+        recipeId: recipeId || undefined,
+        description: notes || "Featured cooking video from Lisa's Kitchen Studio."
+      };
+
+      // 1. Add to Lisa's channel in state.videoChannels
+      const ch = (state.videoChannels || []).find(c => c.id === "lisas-channel");
+      if (ch) {
+        if (!Array.isArray(ch.videos)) ch.videos = [];
+        const existingIdx = ch.videos.findIndex(v => v.id === newVid.id || (v.url && v.url === newVid.url));
+        if (existingIdx >= 0) ch.videos[existingIdx] = newVid;
+        else ch.videos.unshift(newVid);
+      }
+
+      // 2. Link to recipe in state.recipes & add to gallery media
+      if (recipeId) {
+        const target = state.recipes.find(r => r.id === recipeId);
+        if (target) {
+          if (finalYt && (setPrimary || !target.youtube)) {
+            target.youtube = finalYt;
+          }
+          if (!Array.isArray(target.media)) target.media = [];
+          target.media.unshift({
+            id: `media-${Date.now()}`,
+            kind: (isYt || ytId) ? "youtube" : "video",
+            path: filePath,
+            caption: title
+          });
+        }
+      }
+
+      // 3. Persist in localStorage so it never disappears on refresh
+      try {
+        const savedCustom = JSON.parse(localStorage.getItem("lisa_custom_videos") || "[]");
+        savedCustom.unshift(newVid);
+        localStorage.setItem("lisa_custom_videos", JSON.stringify(savedCustom.slice(0, 50)));
+      } catch {}
+
+      // 4. Background server sync
+      try {
+        await api("/api/channels/link-recipe", {
+          method: "POST",
+          json: { title, url: finalYt || filePath, recipeId, notes }
+        }).catch(() => null);
+      } catch {}
+
+      state.showVideoUploadModal = false;
+      state.uploadVideoPreview = null;
+      state.uploadSelectedFile = null;
+      state.uploadVideoTitle = "";
+      state.uploadVideoNotes = "";
+      state.uploadSelectedRecipe = "";
+      state.uploadYouTubeUrl = "";
+      state.uploadSelectedExistingVideo = "";
+
+      say(recipeId ? "🎬 Video saved and linked to recipe!" : "🎬 Video saved to Lisa's Kitchen Studio!");
       render();
     }
     if (form.id === "film-form") {

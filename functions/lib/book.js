@@ -697,12 +697,13 @@ async function createRecipe(request, env) {
   if (!image) return json({ error: "Add a picture of this plate before saving it." }, 400);
   const now = new Date().toISOString();
   const id = await slugify(env, title);
+  const youtube = String(body.youtube || "").trim();
   await env.DB.prepare(`
     INSERT INTO recipes (
       id, title, cuisine, category, summary, yield_text, prep_minutes, cook_minutes,
-      ingredients, steps, notes, image, image_credit, source_url, source_title, family, author_id,
+      ingredients, steps, notes, image, image_credit, source_url, source_title, youtube, family, author_id,
       created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)
   `).bind(
     id,
     title,
@@ -719,6 +720,7 @@ async function createRecipe(request, env) {
     imageCredit,
     String(body.sourceUrl || "").slice(0, 500),
     String(body.sourceTitle || "").slice(0, 160),
+    youtube,
     user.id,
     now,
     now
@@ -745,9 +747,10 @@ async function updateRecipe(request, env, id) {
   if (title.length < 2 || !ingredients.length || !steps.length) {
     return json({ error: "Keep a title, ingredients, and steps." }, 400);
   }
+  const youtube = body.youtube != null ? String(body.youtube).trim() : (existing.youtube || "");
   await env.DB.prepare(`
     UPDATE recipes SET title=?, cuisine=?, category=?, summary=?, yield_text=?, prep_minutes=?,
-      cook_minutes=?, ingredients=?, steps=?, notes=?, source_url=?, source_title=?, updated_at=?
+      cook_minutes=?, ingredients=?, steps=?, notes=?, source_url=?, source_title=?, youtube=?, updated_at=?
     WHERE id=?
   `).bind(
     title,
@@ -762,6 +765,7 @@ async function updateRecipe(request, env, id) {
     String(body.notes ?? existing.notes).slice(0, 2000),
     String(body.sourceUrl ?? existing.source_url).slice(0, 500),
     String(body.sourceTitle ?? existing.source_title).slice(0, 160),
+    youtube,
     new Date().toISOString(),
     existing.id
   ).run();
@@ -1626,12 +1630,14 @@ async function linkChannelRecipe(request, env) {
     }
   } catch {}
 
+  const isYt = Boolean(ytId);
   const videoObj = {
     id: `lisa-${ytId || Date.now()}`,
     title,
     channel: "Lisa's Kitchen Studio",
-    duration: "Tutorial",
-    youtube: link,
+    duration: isYt ? "YouTube Tutorial" : "Uploaded Video",
+    youtube: isYt ? link : "",
+    url: isYt ? "" : link,
     thumbnail: ytId ? `https://img.youtube.com/vi/${ytId}/hqdefault.jpg` : "/images/garden-to-table.jpg",
     category: "cooking",
     recipeId: recId || undefined,
@@ -1640,13 +1646,18 @@ async function linkChannelRecipe(request, env) {
 
   const lisaChannel = VIDEO_CHANNELS.find(c => c.id === "lisas-channel");
   if (lisaChannel) {
-    const exists = lisaChannel.videos.some(v => (v.youtube || "").includes(ytId || link));
+    const exists = lisaChannel.videos.some(v => (v.youtube && (v.youtube.includes(ytId || link))) || (v.url && v.url === link));
     if (!exists) lisaChannel.videos.unshift(videoObj);
   }
 
   if (recId) {
     try {
-      await env.DB.prepare("UPDATE recipes SET youtube = ?, updated_at = ? WHERE id = ?").bind(link, new Date().toISOString(), recId).run();
+      if (isYt) {
+        await env.DB.prepare("UPDATE recipes SET youtube = ?, updated_at = ? WHERE id = ?").bind(link, new Date().toISOString(), recId).run();
+      } else if (link) {
+        await env.DB.prepare("INSERT INTO recipe_media (recipe_id, kind, path, caption, created_at) VALUES (?, 'video', ?, ?, ?)")
+          .bind(recId, link, title, new Date().toISOString()).run();
+      }
     } catch (e) {
       console.warn("Recipe link update notice:", e);
     }

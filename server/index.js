@@ -407,12 +407,14 @@ app.post("/api/channels/link-recipe", (req, res) => {
     }
   } catch {}
 
+  const isYt = Boolean(ytId);
   const videoObj = {
     id: `lisa-${ytId || Date.now()}`,
     title: vTitle,
     channel: "Lisa's Kitchen Studio",
-    duration: "Tutorial",
-    youtube: link,
+    duration: isYt ? "YouTube Tutorial" : "Uploaded Video",
+    youtube: isYt ? link : "",
+    url: isYt ? "" : link,
     thumbnail: ytId ? `https://img.youtube.com/vi/${ytId}/hqdefault.jpg` : "/images/garden-to-table.jpg",
     category: "cooking",
     recipeId: recId || undefined,
@@ -421,14 +423,19 @@ app.post("/api/channels/link-recipe", (req, res) => {
 
   const lisaChannel = VIDEO_CHANNELS.find(c => c.id === "lisas-channel");
   if (lisaChannel) {
-    const exists = lisaChannel.videos.some(v => (v.youtube || "").includes(ytId || link));
+    const exists = lisaChannel.videos.some(v => (v.youtube && (v.youtube.includes(ytId || link))) || (v.url && v.url === link));
     if (!exists) lisaChannel.videos.unshift(videoObj);
   }
 
-  // If a recipe is selected, link the youtube field directly in SQLite
+  // If a recipe is selected, link in SQLite
   if (recId) {
     try {
-      db.prepare("UPDATE recipes SET youtube = ?, updated_at = ? WHERE id = ?").run(link, new Date().toISOString(), recId);
+      if (isYt) {
+        db.prepare("UPDATE recipes SET youtube = ?, updated_at = ? WHERE id = ?").run(link, new Date().toISOString(), recId);
+      } else if (link) {
+        db.prepare("INSERT INTO recipe_media (recipe_id, kind, path, caption, created_at) VALUES (?, 'video', ?, ?, ?)")
+          .run(recId, link, vTitle, new Date().toISOString());
+      }
     } catch (e) {
       console.warn("Recipe link update notice:", e);
     }
@@ -555,12 +562,13 @@ app.post("/api/recipes", async (req, res) => {
   if (!image) return res.status(400).json({ error: "Add a picture of this plate before saving it." });
   const now = new Date().toISOString();
   const id = slugify(title);
+  const youtube = String(req.body.youtube || "").trim();
   db.prepare(`
     INSERT INTO recipes (
       id, title, cuisine, category, summary, yield_text, prep_minutes, cook_minutes,
-      ingredients, steps, notes, image, image_credit, source_url, source_title, family,
+      ingredients, steps, notes, image, image_credit, source_url, source_title, youtube, family,
       created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
   `).run(
     id,
     title,
@@ -577,6 +585,7 @@ app.post("/api/recipes", async (req, res) => {
     imageCredit,
     String(req.body.sourceUrl || "").slice(0, 500),
     String(req.body.sourceTitle || "").slice(0, 160),
+    youtube,
     now,
     now
   );
@@ -597,9 +606,10 @@ app.patch("/api/recipes/:id", (req, res) => {
   if (title.length < 2 || !ingredients.length || !steps.length) {
     return res.status(400).json({ error: "Keep a title, ingredients, and steps." });
   }
+  const youtube = req.body.youtube != null ? String(req.body.youtube).trim() : (existing.youtube || "");
   db.prepare(`
     UPDATE recipes SET title=?, cuisine=?, category=?, summary=?, yield_text=?, prep_minutes=?,
-      cook_minutes=?, ingredients=?, steps=?, notes=?, source_url=?, source_title=?, updated_at=?
+      cook_minutes=?, ingredients=?, steps=?, notes=?, source_url=?, source_title=?, youtube=?, updated_at=?
     WHERE id=?
   `).run(
     title,
@@ -614,6 +624,7 @@ app.patch("/api/recipes/:id", (req, res) => {
     String(req.body.notes ?? existing.notes).slice(0, 2000),
     String(req.body.sourceUrl ?? existing.source_url).slice(0, 500),
     String(req.body.sourceTitle ?? existing.source_title).slice(0, 160),
+    youtube,
     new Date().toISOString(),
     existing.id
   );
